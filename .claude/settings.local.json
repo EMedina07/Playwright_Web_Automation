@@ -4,7 +4,11 @@
       "Bash(npm install *)",
       "Bash(git mv *)",
       "Bash(git rm *)",
-      "Bash(git -C \"c:\\\\Users\\\\emedi\\\\OneDrive\\\\Desktop\\\\Framenwork\\\\Playwright_Framenwork\" pull)"
+      "Bash(git -C \"c:\\\\Users\\\\emedi\\\\OneDrive\\\\Desktop\\\\Framenwork\\\\Playwright_Framenwork\" pull)",
+      "Bash(npx tsc *)",
+      "Bash(node scripts/run-tests.js qa)",
+      "Bash(.\\\\node_modules\\\\.bin\\\\cross-env --version)",
+      "Bash(npx cross-env *)"
     ]
   }
 }

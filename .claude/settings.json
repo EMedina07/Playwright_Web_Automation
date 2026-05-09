@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e ' *)",
+      "Bash(exist \"reports\\\\case-registry.json\" del \"reports\\\\case-registry.json\")",
+      "Bash(exist \"reports\\\\.dashboard-created\" del \"reports\\\\.dashboard-created\")",
+      "Bash(node -e \"const r=require\\('./reports/cucumber-report.json'\\); console.log\\('URI:', r[0].uri\\);\")",
+      "Bash(git checkout *)",
+      "PowerShell(Start-Process \"c:\\\\Users\\\\PC\\\\Desktop\\\\QA Automation Framenworks\\\\playwright_framenwork\\\\Playwright_Framenwork\\\\reports\\\\qa-dashboard.html\")",
+      "PowerShell(cd \"c:\\\\Users\\\\PC\\\\Desktop\\\\QA Automation Framenworks\\\\playwright_framenwork\\\\Playwright_Framenwork\"; Get-ChildItem reports\\\\ -Recurse -File | Where-Object { $_.Extension -eq \".json\" } | Select-Object FullName)",
+      "Bash(npx ts-node --transpile-only -e ' *)",
+      "PowerShell(if \\(-not $?\\) { \"no registry\" })",
+      "PowerShell(cd \"c:\\\\Users\\\\PC\\\\Desktop\\\\QA Automation Framenworks\\\\playwright_framenwork\\\\Playwright_Framenwork\"; $env:ENV=\"qa\"; npx ts-node --transpile-only scripts/jira-sync.ts 2>&1)",
+      "PowerShell(cd \"c:\\\\Users\\\\PC\\\\Desktop\\\\QA Automation Framenworks\\\\playwright_framenwork\\\\Playwright_Framenwork\"; $env:ENV=\"qa\"; node scripts/run-tests.js qa 2>&1)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\PC\\\\Desktop\\\\QA Automation Framenworks\\\\playwright_framenwork\\\\Playwright_Framenwork\\\\core\\\\integrations\\\\\" -Recurse -File | Select-Object FullName)",
+      "Bash(dir /s /b)",
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\PC\\\\Desktop\\\\QA Automation Framenworks\\\\playwright_framenwork\\\\Playwright_Framenwork\" -Exclude node_modules -Recurse | Where-Object { -not $_.PSIsContainer } | Sort-Object FullName)"
+    ]
+  }
+}
