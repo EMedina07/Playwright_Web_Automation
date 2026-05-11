@@ -2,7 +2,7 @@
 
 > **Documento vivo.** Debe actualizarse cada vez que se modifique la arquitectura del framework, se agreguen métodos a BasePage/PageHelpers, cambie el sistema de evidencias, se agregue una integración nueva o se modifique el pipeline de ejecución. La versión desactualizada de este prompt produce implementaciones incorrectas.
 >
-> **Última actualización:** 2026-05-09 — Refleja el estado real del repositorio incluyendo QA Bridge (Módulo 2) y el pipeline de integración con Jira.
+> **Última actualización:** 2026-05-11 — Prefijo de tag configurable (`TAG_PREFIX`): el sistema ya no asume Jira como herramienta ni `KAN` como proyecto. Cualquier herramienta y cualquier proyecto key funcionan sin tocar código.
 
 ---
 
@@ -326,26 +326,56 @@ export default { env: SupportedEnvironment, baseURL: string }
 
 ---
 
-## QA Bridge — Integración con Jira
+## QA Bridge — Integración con herramientas de gestión
 
 `core/integrations/` + `scripts/jira-sync.ts` — **NO MODIFICAR**
 
 El pipeline ejecuta `jira-sync.ts` automáticamente después de cada run via `scripts/run-tests.js`. Para que la integración funcione, los feature files deben tener las tags correctas:
 
 ```gherkin
-@Regresion @jira:KAN-XX
+@Regresion @<TAG_PREFIX>:<PROJECT_KEY>-XX
 Scenario: Nombre del escenario
 ```
 
-**Funcionamiento:**
-- **Primera ejecución** (sin `@jira:`): jira-sync crea el issue en Jira, agrega `@jira:KAN-XX` al `.feature` automáticamente y guarda el mapeo en `reports/.jira/case-registry.dat`
+Ejemplo con Jira proyecto `KAN`: `@Regresion @jira:KAN-21`
+Ejemplo con TestRail: `@Regresion @testrail:C123`
+
+### Sistema de tags — cómo funciona y cómo configurarlo
+
+El prefijo del tag (`jira`, `testrail`, `azure`, etc.) se controla con **una sola variable de entorno**:
+
+```
+TAG_PREFIX=jira       # default — escribe @jira:PROJ-123
+TAG_PREFIX=testrail   # escribe @testrail:C123
+TAG_PREFIX=azure      # escribe @azure:WI-456
+```
+
+Esta variable vive en `core/integrations/config/tag.config.ts` y es el **único** lugar que conoce el prefijo. `FeatureTagger`, `JiraMapper` y `DashboardGenerator` importan desde ahí. **Nunca duplicar el prefijo en otro archivo.**
+
+El project key (`KAN`, `PROJ`, `TES`, etc.) **no** está hardcodeado: viene del issue que crea la herramienta cuando se hace la primera sincronización. La variable `JIRA_PROJECT_KEY` controla en qué proyecto Jira se crean los issues; el key resultante (`PROJ-XX`) se escribe automáticamente en el `.feature`.
+
+**Secuencia de primera ejecución (sin tag):**
+1. Escenario no tiene `@<TAG_PREFIX>:` → el sync crea el issue en la herramienta configurada
+2. El issue retorna su key (`PROJ-42`)
+3. `FeatureTagger` escribe `@<TAG_PREFIX>:PROJ-42` en el `.feature` automáticamente
+4. El mapeo queda guardado en `reports/.jira/case-registry.dat`
+
+**Funcionamiento en regresión:**
 - **Ejecución con `@Regresion`**: actualiza descripción + evidencias + estado del issue existente
-- **Ejecución sin `@Regresion`** (retest): omite sincronización (no interactúa con Jira)
+- **Ejecución sin `@Regresion`** (retest): omite sincronización (no interactúa con la herramienta)
 - **Resumen de regresión**: al final de cada run con `@Regresion`, crea o actualiza un issue de resumen con tabla de resultados, ejecutor (`JIRA_EXECUTOR_NAME`) y análisis de fallos
 
+**Análisis de fallos**: cuando un escenario falla, el framework clasifica el error y actúa:
+- **Error de framework** (timeout, element-not-found, strict-mode, page-crash, network, TypeError) → crea Tarea de Refactorización vinculada al caso de prueba
+- **Error de aplicación** (assertions toBe/toEqual/toContainText/toBeVisible/toHaveURL) → crea Bug con pasos de reproducción, evidencias y assignee del developer de la historia padre
+- **Recurrencia**: si ya existe un Bug/Tarea abierta vinculada al caso, agrega comentario de recurrencia en lugar de crear duplicado
+- **`QA_AGENT_MODE=true`**: fallos de framework NO crean tarea — el agente debe corregir el código y re-ejecutar. Los bugs de aplicación se crean igual
+- **`JIRA_BUG_ISSUE_TYPE`**: nombre del tipo de issue para bugs (default `Task`). Configurar a `Bug` si el proyecto lo tiene disponible
+
 **Convención de tags en Feature files:**
-- `@Regresion` — indica que es un escenario de regresión. Activar solo cuando el módulo esté estable
-- `@jira:KEY-XX` — vincula el escenario al issue Jira. Se agrega automáticamente al crear; no hardcodear manualmente
+- `@Regresion` — indica escenario de regresión. Activar solo cuando el módulo esté estable
+- `@<TAG_PREFIX>:KEY-XX` — vincula el escenario al issue. Se agrega automáticamente; no hardcodear manualmente
+- En desarrollo, usar `@<TAG_PREFIX>:PENDIENTE` como placeholder — el sync lo reemplaza en la primera ejecución
 
 **LoginHelper** — `src/support/LoginHelper.ts`
 
@@ -568,7 +598,7 @@ Feature: [Nombre descriptivo] — [Sistema bajo prueba]
 - Parámetros variables entre escenarios van como `{string}` o `{int}`
 - No repetir lógica — usar `Background` o `Scenario Outline` si 3+ scenarios comparten steps
 - Steps en el mismo idioma que el resto del proyecto (español)
-- Tag `@jira:PENDIENTE` se reemplaza automáticamente por `@jira:KAN-XX` en la primera ejecución con Jira activo. **No eliminar el tag `@Regresion`**
+- El prefijo del tag (`jira` en el template) **debe coincidir con el valor de `TAG_PREFIX`** del proyecto. Si el proyecto usa TestRail, el tag sería `@testrail:PENDIENTE`. El sync lo reemplaza automáticamente por el key real en la primera ejecución. **No eliminar el tag `@Regresion`**
 
 ---
 
@@ -706,6 +736,75 @@ En ambientes demo o staging con latencia alta, ajustar el threshold al doble y d
 
 ---
 
+## ONBOARDING — Configuración requerida para un proyecto nuevo
+
+Antes de escribir un solo escenario, el framework necesita estar configurado para el proyecto. Este es el checklist completo. Nada de esto requiere tocar código: solo variables de entorno.
+
+### 1 — Herramienta de gestión de proyectos
+
+| Pregunta | Variable | Ejemplo |
+|---|---|---|
+| ¿Qué herramienta se usa? (Jira / TestRail / Azure DevOps / otra) | — | Jira Cloud |
+| ¿Cuál es el prefijo del tag en los `.feature`? | `TAG_PREFIX` | `jira` / `testrail` / `azure` |
+| ¿La herramienta está activa? | `JIRA_ENABLED` | `true` / `false` |
+
+> **Regla:** `TAG_PREFIX` debe decidirse antes de crear el primer escenario. Una vez que hay tags escritos en los `.feature`, cambiar el prefijo requiere actualizar todos los tags existentes manualmente.
+
+### 2 — Datos del proyecto en la herramienta
+
+| Pregunta | Variable | Ejemplo |
+|---|---|---|
+| URL base de la herramienta | `JIRA_BASE_URL` | `https://empresa.atlassian.net` |
+| Email del usuario QA en la herramienta | `JIRA_EMAIL` | `qa@empresa.com` |
+| API Token / credencial de acceso | `JIRA_API_TOKEN` | (token generado en la herramienta) |
+| Project Key del proyecto | `JIRA_PROJECT_KEY` | `PROJ` / `TES` / `QA` |
+| Key de la Historia/Epic padre donde se crearán los casos | `JIRA_PARENT_ISSUE_KEY` | `PROJ-1` |
+| Key del Epic si los casos se vinculan a un Epic | `JIRA_EPIC_KEY` | `PROJ-2` |
+| Nombre del ejecutor para el resumen de regresión | `JIRA_EXECUTOR_NAME` | `Ezequiel` |
+
+> **Sobre el project key:** el framework no asume ningún key. Cuando se ejecuta por primera vez, Jira crea el issue en el proyecto indicado por `JIRA_PROJECT_KEY` y retorna su key (ej. `PROJ-42`). El framework escribe `@jira:PROJ-42` automáticamente en el `.feature`. No hay nada hardcodeado.
+
+### 3 — Comportamiento ante fallos
+
+| Pregunta | Variable | Default |
+|---|---|---|
+| ¿Qué tipo de issue crear para bugs? | `JIRA_BUG_ISSUE_TYPE` | `Task` (usar `Bug` si el proyecto lo tiene) |
+| ¿Está corriendo un agente de IA? | `QA_AGENT_MODE` | `false` |
+
+### 4 — Aplicación bajo prueba
+
+| Pregunta | Variable | Ejemplo |
+|---|---|---|
+| URL base del ambiente (sin path final) | `BASE_URL` | `https://app.mi-cliente.com` |
+| Ambiente activo | `ENV` | `qa` / `cert` |
+
+### Plantilla de `.env.qa` para proyecto nuevo
+
+```env
+# ── Aplicación ──────────────────────────────
+BASE_URL=https://app.mi-cliente.com
+ENV=qa
+
+# ── Herramienta de gestión ──────────────────
+TAG_PREFIX=jira
+
+# ── Jira ────────────────────────────────────
+JIRA_ENABLED=true
+JIRA_BASE_URL=https://mi-cliente.atlassian.net
+JIRA_EMAIL=qa@mi-cliente.com
+JIRA_API_TOKEN=XXXXXXXXXXXXXXXX
+JIRA_PROJECT_KEY=PROJ
+JIRA_PARENT_ISSUE_KEY=PROJ-1
+JIRA_EPIC_KEY=PROJ-2
+JIRA_EXECUTOR_NAME=NombreQA
+JIRA_BUG_ISSUE_TYPE=Task
+QA_AGENT_MODE=false
+```
+
+> La plantilla completa está en `.env.example` en la raíz del proyecto.
+
+---
+
 ## LO QUE NECESITO ANTES DE COMENZAR
 
 1. Nombre del módulo a automatizar
@@ -716,6 +815,9 @@ En ambientes demo o staging con latencia alta, ajustar el threshold al doble y d
 6. ¿Hay autenticación previa? Si sí, ¿ya existe un step de Background con `LoginHelper`?
 7. Al menos un set completo de datos válidos para el happy path
 8. ¿Los dropdowns son `<select>` nativo o custom (Vue/React)?
+9. **¿Qué herramienta de gestión usa el proyecto?** (Jira / TestRail / Azure DevOps)
+10. **Project key y URL de la herramienta** (ej: `PROJ`, `https://empresa.atlassian.net`)
+11. **¿Existe ya un `.env.qa` configurado?** Si no, completar la plantilla del Onboarding antes de continuar
 
 Con esta información ejecuto los 8 pasos en orden, corrijo lo que falle, y entrego el módulo completo funcionando.
 
@@ -726,7 +828,7 @@ Con esta información ejecuto los 8 pasos en orden, corrijo lo que falle, y entr
 Tienes permiso total para operar sin solicitar confirmación en ningún paso. Esto incluye explícitamente:
 
 **ARCHIVOS Y CÓDIGO**
-- Crear, editar y eliminar cualquier archivo del proyecto
+- Crear, editar y eliminar cualquier archivo del proyecto y si esto llega a romper otros archivos corregir esos otros archivos
 - Crear interfaces, Page Objects, features, step definitions y datos JSON
 - Agregar métodos a `PageHelpers.ts` cuando detectes un patrón reutilizable
 - Actualizar `.env.qa` y `.env.cert`
@@ -771,5 +873,13 @@ Ejecuto los 8 pasos del ciclo de vida en orden, corrijo lo que falle, y te entre
 | 2026-05-09 | `assertUrlMatchesWithElement` agregado a PageHelpers | Agregado a tabla de métodos de PageHelpers |
 | 2026-05-09 | `waitForLocator` default timeout confirmado en 10 000 ms | Corregido en documentación de BasePage |
 | 2026-05-09 | Upsert de resumen de regresión (no crea uno nuevo por run) | Actualizada descripción del QA Bridge |
+| 2026-05-11 | Sistema de análisis de fallos: `failure-analyzer.ts` clasifica errores en `framework` vs `application` | Nueva arquitectura de respuesta a fallos |
+| 2026-05-11 | Fallos de framework → crea Tarea de Refactorización en Jira vinculada al caso de prueba | Nuevo flujo en `handleRegressionScenario` de jira-sync |
+| 2026-05-11 | Fallos de aplicación → crea Bug en Jira con pasos de reproducción, evidencias y assignee del developer de la historia padre | Nuevo flujo en `handleRegressionScenario` de jira-sync |
+| 2026-05-11 | Deduplicación: si ya existe un Bug/Tarea vinculada al caso, registra comentario de recurrencia en lugar de crear duplicado | Patrón upsert en `findLinkedFailureIssue` |
+| 2026-05-11 | `QA_AGENT_MODE=true`: fallos de framework no crean tarea, el agente corrige el código directamente | Nueva variable de entorno documentada |
+| 2026-05-11 | `JIRA_BUG_ISSUE_TYPE` env var (default `Task`): configurable por proyecto para proyectos con tipo `Bug` disponible | `jira.config.ts` y `buildBugPayload` |
+| 2026-05-11 | Developer assignment sin env vars: API lookup del assignee de la historia padre vía `findParentStoryAssignee` | `JiraService.findParentStoryAssignee` |
+| 2026-05-11 | Prefijo de tag descentralizado: `TAG_PREFIX` env var + `tag.config.ts`. El sistema ya no asume `@jira:` ni `KAN` — funciona con cualquier herramienta y project key | Nueva sección ONBOARDING en prompt; `FeatureTagger`, `JiraMapper`, `DashboardGenerator` actualizados |
 
 > Cuando realices un cambio estructural, agrega una fila a esta tabla con la fecha, el cambio y qué sección del prompt se actualizó.

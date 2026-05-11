@@ -33,6 +33,7 @@ export interface JiraConfig {
   teamId?: string;
   dueDateDays?: number;
   executorName?: string;
+  bugIssueType?: string;
 }
 
 export function loadJiraConfig(): JiraConfig {
@@ -61,5 +62,6 @@ export function loadJiraConfig(): JiraConfig {
     teamId: optionalEnv('JIRA_TEAM_ID'),
     dueDateDays: dueDateDaysRaw ? parseInt(dueDateDaysRaw, 10) : undefined,
     executorName: optionalEnv('JIRA_EXECUTOR_NAME'),
+    bugIssueType: optionalEnv('JIRA_BUG_ISSUE_TYPE') ?? 'Task',
   };
 }

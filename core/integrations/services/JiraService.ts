@@ -11,8 +11,12 @@ import {
   buildTransitionPayload,
   buildRegressionSummaryPayload,
   buildRegressionSummaryUpdatePayload,
+  buildRefactoringTaskPayload,
+  buildBugPayload,
+  buildRecurrenceCommentBody,
 } from '../mappers/JiraMapper';
 import { parseAllCards } from '../utils/card-parser';
+import { FailureAnalysis } from '../utils/failure-analyzer';
 
 interface JiraIssueResponse {
   id: string;
@@ -212,5 +216,139 @@ export class JiraService {
 
   async verifyConnection(): Promise<void> {
     await getJson(this.client, '/myself');
+  }
+
+  // ─── Failure analysis ───────────────────────────────────────────────────────
+
+  private async getIssueLinks(issueKey: string): Promise<string[]> {
+    try {
+      const res = await getJson<{ fields: { issuelinks: Array<{ outwardIssue?: { key: string }; inwardIssue?: { key: string } }> } }>(
+        this.client, `/issue/${issueKey}?fields=issuelinks`,
+      );
+      const links = res.data.fields.issuelinks ?? [];
+      return links.flatMap((l) => [l.outwardIssue?.key, l.inwardIssue?.key].filter(Boolean) as string[]);
+    } catch {
+      return [];
+    }
+  }
+
+  async findLinkedFailureIssue(
+    testCaseKey: string,
+    type: 'bug' | 'refactoring',
+  ): Promise<JiraIssueRef | null> {
+    const linkedKeys = await this.getIssueLinks(testCaseKey);
+    if (linkedKeys.length === 0) return null;
+
+    const label = type === 'bug' ? 'qa-failure-bug' : 'qa-refactoring';
+    const keyList = linkedKeys.map((k) => `"${k}"`).join(', ');
+    const jql = `key in (${keyList}) AND labels = "${label}" AND status not in (Done, Resuelto, Finalizada, Closed)`;
+    try {
+      const res = await postJson<{ issues: JiraIssueResponse[] }>(
+        this.client, '/search/jql', { jql, fields: ['summary'], maxResults: 1 },
+      );
+      const issue = res.data.issues?.[0];
+      if (!issue) return null;
+      return { key: issue.key, id: issue.id, url: `${this.cfg.baseUrl}/browse/${issue.key}` };
+    } catch {
+      return null;
+    }
+  }
+
+  async getIssueAssignee(issueKey: string): Promise<string | null> {
+    try {
+      const res = await getJson<{ fields: { assignee?: { accountId: string } } }>(
+        this.client, `/issue/${issueKey}?fields=assignee`,
+      );
+      return res.data.fields.assignee?.accountId ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async findLinkedStory(testCaseKey: string): Promise<{ key: string; assigneeAccountId?: string } | null> {
+    const linkedKeys = await this.getIssueLinks(testCaseKey);
+    for (const key of linkedKeys) {
+      try {
+        const res = await getJson<{ fields: { issuetype: { name: string }; assignee?: { accountId: string } } }>(
+          this.client, `/issue/${key}?fields=issuetype,assignee`,
+        );
+        const issueType = res.data.fields.issuetype?.name?.toLowerCase() ?? '';
+        if (['story', 'epic', 'historia'].includes(issueType)) {
+          return { key, assigneeAccountId: res.data.fields.assignee?.accountId };
+        }
+      } catch {
+        continue;
+      }
+    }
+    return null;
+  }
+
+  async createRefactoringTask(
+    testCaseKey: string,
+    scenario: QACucumberResult,
+    analysis: FailureAnalysis,
+    qaAccountId?: string,
+    attachmentMap?: Map<string, string>,
+  ): Promise<JiraIssueRef> {
+    const payload = buildRefactoringTaskPayload(testCaseKey, scenario, analysis, this.cfg, qaAccountId);
+    const res = await postJson<JiraIssueResponse>(this.client, '/issue', payload);
+    const ref: JiraIssueRef = { key: res.data.key, id: res.data.id, url: `${this.cfg.baseUrl}/browse/${res.data.key}` };
+
+    await postJson(this.client, '/issueLink', {
+      type: { name: 'Relates' },
+      inwardIssue: { key: ref.key },
+      outwardIssue: { key: testCaseKey },
+    });
+
+    return ref;
+  }
+
+  async createBug(
+    testCaseKey: string,
+    scenario: QACucumberResult,
+    analysis: FailureAnalysis,
+    devAccountId?: string,
+    attachmentMap?: Map<string, string>,
+    parentStoryKey?: string,
+  ): Promise<JiraIssueRef> {
+    const payload = buildBugPayload(testCaseKey, scenario, analysis, devAccountId, this.cfg);
+    const res = await postJson<JiraIssueResponse>(this.client, '/issue', payload);
+    const ref: JiraIssueRef = { key: res.data.key, id: res.data.id, url: `${this.cfg.baseUrl}/browse/${res.data.key}` };
+
+    // Link bug → test case
+    await postJson(this.client, '/issueLink', {
+      type: { name: 'Relates' },
+      inwardIssue: { key: ref.key },
+      outwardIssue: { key: testCaseKey },
+    });
+
+    // Link bug → parent story (so the dev sees it from their story)
+    if (parentStoryKey) {
+      await postJson(this.client, '/issueLink', {
+        type: { name: 'Relates' },
+        inwardIssue: { key: ref.key },
+        outwardIssue: { key: parentStoryKey },
+      });
+    }
+
+    if (scenario.screenshots.length > 0) {
+      try {
+        await this.attachScreenshots(ref.key, scenario);
+      } catch {
+        // Non-fatal — attachments already exist on the test case
+      }
+    }
+
+    return ref;
+  }
+
+  async addFailureRecurrenceComment(
+    issueKey: string,
+    scenario: QACucumberResult,
+    analysis: FailureAnalysis,
+    runDate: string,
+  ): Promise<void> {
+    const body = buildRecurrenceCommentBody(scenario, analysis, runDate);
+    await postJson(this.client, `/issue/${issueKey}/comment`, { body });
   }
 }

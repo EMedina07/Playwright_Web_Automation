@@ -14,6 +14,7 @@ import { getIssueKey, setIssueKey, touchSync } from '../core/integrations/utils/
 import { tagScenarioInFeature } from '../core/integrations/FeatureTagger';
 import { shouldGenerateDashboard } from '../core/integrations/DashboardGenerator';
 import { JiraSyncResult, QACucumberResult } from '../core/integrations/types/qa-bridge.types';
+import { analyzeFailure } from '../core/integrations/utils/failure-analyzer';
 
 const REPORT_PATH = path.resolve(process.cwd(), 'reports', 'cucumber-report.json');
 
@@ -90,6 +91,44 @@ async function handleRegressionScenario(
       await jira.transitionToDone(issueKey);
     } else {
       await jira.transitionToFailed(issueKey);
+    }
+
+    // ── Failure analysis: classify and create Bug or Refactoring task ──────────
+    if (scenario.status === 'failed') {
+      const runDate = new Date().toISOString().slice(0, 10);
+      const isAgentMode = process.env.QA_AGENT_MODE === 'true';
+      const analysis = analyzeFailure(scenario);
+
+      console.log(`    🔎 Clasificación: ${analysis.classification === 'framework' ? '🔧 Framework' : '🐛 Aplicación'} — ${analysis.errorTitle}`);
+
+      try {
+        const existingType = analysis.classification === 'framework' ? 'refactoring' : 'bug';
+        const existing = await jira.findLinkedFailureIssue(issueKey, existingType);
+
+        if (existing) {
+          await jira.addFailureRecurrenceComment(existing.key, scenario, analysis, runDate);
+          console.log(`    🔄 Recurrencia registrada en: ${existing.url}`);
+        } else if (analysis.classification === 'framework' && isAgentMode) {
+          console.log(`    🤖 [AGENT MODE] Fallo de framework detectado — el agente debe corregir el código y re-ejecutar.`);
+        } else if (analysis.classification === 'framework') {
+          const qaAccountId = await jira.getIssueAssignee(issueKey);
+          if (qaAccountId) console.log(`    👤 Asignando refactorización al QA del caso: ${qaAccountId}`);
+          const taskRef = await jira.createRefactoringTask(issueKey, scenario, analysis, qaAccountId ?? undefined, attachmentMap);
+          console.log(`    🔧 Tarea de refactorización creada: ${taskRef.url}`);
+        } else {
+          const parentStory = await jira.findLinkedStory(issueKey);
+          const devAccountId = parentStory?.assigneeAccountId ?? null;
+          if (devAccountId) console.log(`    👤 Asignando bug al developer de la historia padre (${parentStory?.key}): ${devAccountId}`);
+          if (parentStory?.key) console.log(`    🔗 Vinculando bug a la historia padre: ${parentStory.key}`);
+          const bugRef = await jira.createBug(issueKey, scenario, analysis, devAccountId ?? undefined, attachmentMap, parentStory?.key);
+          console.log(`    🐛 Bug creado: ${bugRef.url}`);
+        }
+      } catch (failErr: unknown) {
+        const msg = failErr instanceof Error ? failErr.message : String(failErr);
+        const detail = (failErr as any)?.response?.data;
+        console.warn(`    ⚠️ No se pudo crear el issue de fallo: ${msg}`);
+        if (detail) console.warn(`    🔍 Respuesta Jira: ${JSON.stringify(detail)}`);
+      }
     }
 
     touchSync(scenario.scenarioId);

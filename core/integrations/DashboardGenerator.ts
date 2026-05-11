@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { QARunSummary } from './types/qa-bridge.types';
+import { extractIssueKey } from './config/tag.config';
 
 const REPORTS_DIR = path.resolve(process.cwd(), 'reports');
 const JIRA_DIR = path.join(REPORTS_DIR, '.jira');
@@ -21,8 +22,7 @@ export function generateDashboard(summary: QARunSummary, jiraBaseUrl: string): v
 
   const scenarioRows = summary.scenarios
     .map((s) => {
-      const jiraTag = s.tags.find((t) => t.startsWith('@jira:'));
-      const issueKey = jiraTag ? jiraTag.replace('@jira:', '') : null;
+      const issueKey = extractIssueKey(s.tags) ?? null;
       const jiraLink = issueKey && jiraBaseUrl
         ? `<a href="${jiraBaseUrl}/browse/${issueKey}" target="_blank" style="color:#3b82f6;text-decoration:none">${issueKey}</a>`
         : '<span style="color:#94a3b8">—</span>';

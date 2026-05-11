@@ -1,10 +1,12 @@
 # Arquitectura del Framework QA — Playwright + Cucumber + TypeScript
 
+> **Última actualización:** 2026-05-11 — Incluye sistema de análisis de fallos, creación automática de Bug/Refactoring Task y modelo multi-adaptador.
+
 ---
 
 ## Vista General del Proyecto
 
-El proyecto está dividido en **tres módulos** independientes que colaboran para ejecutar pruebas automatizadas, generar evidencias y sincronizarlas con una herramienta de gestión de proyectos.
+El proyecto está dividido en **tres módulos** independientes. Cada módulo tiene una responsabilidad única y se comunican a través de archivos intermedios, no por imports directos.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -17,8 +19,8 @@ El proyecto está dividido en **tres módulos** independientes que colaboran par
 │  │                      │  │   (Integración)      │  │   Orquestador     │ │
 │  │  Playwright +        │  │                      │  │                   │ │
 │  │  Cucumber + BDD      │  │  core/integrations/  │  │  scripts/         │ │
-│  │                      │  │                      │  │  cucumber.js      │ │
-│  │  src/                │  │                      │  │  report.ts        │ │
+│  │                      │  │  Multi-Adaptador     │  │  cucumber.js      │ │
+│  │  src/                │  │  (Jira, TestRail...) │  │  report.ts        │ │
 │  │  core/ (no integr.)  │  │                      │  │                   │ │
 │  │                      │  │                      │  │                   │ │
 │  └──────────────────────┘  └──────────────────────┘  └───────────────────┘ │
@@ -30,55 +32,43 @@ El proyecto está dividido en **tres módulos** independientes que colaboran par
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+**Principio de desacoplamiento:**
+- Módulo 1 no sabe que existe Jira ni ninguna herramienta de gestión
+- Módulo 2 no sabe cómo funciona Playwright ni Cucumber
+- Módulo 3 coordina ambos pero no contiene lógica de pruebas ni de integración
+- La comunicación entre módulos ocurre exclusivamente a través de `reports/cucumber-report.json`
+
 ---
 
 ## Flujo de Datos Global
 
 ```
-Desarrollador / CI
+Desarrollador / CI Runner
         │
         │  npm run test:qa
         ▼
-┌───────────────────┐
-│ scripts/          │
-│ run-tests.js      │ ◄── MÓDULO 3: punto de entrada
-└───────┬───────────┘
-        │
-        │ 1. Ejecuta tests
-        ▼
-┌───────────────────┐         ┌────────────────────────┐
-│ cucumber-js       │────────►│ src/ + core/           │
-│ (Cucumber CLI)    │         │ MÓDULO 1: Framework     │
-└───────┬───────────┘         └────────────────────────┘
-        │
-        │ Genera
-        ▼
-┌───────────────────┐
-│ reports/          │
-│ cucumber-          │  ◄── Contrato entre módulos
-│ report.json       │
-└───────┬───────────┘
-        │
-        │ 2. Genera HTML
-        ▼
-┌───────────────────┐
-│ report.ts         │
-│ HTML Reporter     │ ──► reports/html/index.html
-└───────┬───────────┘
-        │
-        │ 3. Sincroniza
-        ▼
-┌───────────────────┐         ┌────────────────────────┐
-│ scripts/          │────────►│ core/integrations/     │
-│ jira-sync.ts      │         │ MÓDULO 2: QA Bridge     │
-└───────────────────┘         └──────────┬─────────────┘
-                                         │
-                                         ▼
-                               ┌─────────────────────┐
-                               │  Jira Cloud API     │
-                               │  (o herramienta     │
-                               │   equivalente)      │
-                               └─────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│ scripts/run-tests.js  ◄── MÓDULO 3: punto de entrada único              │
+└──────────┬───────────────────────────────────────────────────────────────┘
+           │
+           ├─ PASO 1: Ejecutar tests
+           │   cucumber-js ──► src/ + core/ (MÓDULO 1)
+           │   Genera: reports/cucumber-report.json
+           │   Captura: testExitCode (0 = ok, 1 = fallos)
+           │
+           ├─ PASO 2: Generar HTML
+           │   ts-node report.ts ──► reports/html/index.html
+           │   (continúa aunque falle)
+           │
+           ├─ PASO 3: Sincronizar con herramienta(s) de gestión
+           │   ts-node scripts/{tool}-sync.ts ──► MÓDULO 2
+           │   │
+           │   └─► Adaptador Jira ──► Jira Cloud API
+           │       Adaptador TestRail ──► TestRail API   (cuando se active)
+           │   (continúa aunque falle — no bloquea el pipeline)
+           │
+           └─ process.exit(testExitCode)
+               ← exit code de pruebas, nunca del sync
 ```
 
 ---
@@ -100,8 +90,7 @@ Desarrollador / CI
 │  │  src/test/features/**/*.feature                                     │   │
 │  │  Gherkin — Given / When / Then                                      │   │
 │  └──────────────────────────────┬──────────────────────────────────────┘   │
-│                                 │                                           │
-│                                 │ binds to                                  │
+│                                 │ vincula a                                 │
 │                                 ▼                                           │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │  CAPA DE ORQUESTACIÓN (Step Definitions)                            │   │
@@ -119,9 +108,8 @@ Desarrollador / CI
 │  │     ↓             │                  └────────────────────────────┘    │
 │  │  LoginPage        │                                                     │
 │  │  (+ otros)        │                  ┌────────────────────────────┐    │
-│  │                   │ usa              │  INTERFACES / CONTRATOS    │    │
-│  │                   │◄────────────────►│                            │    │
-│  └───────┬───────────┘                  │  LoginData, UserData       │    │
+│  │                   │                  │  INTERFACES / CONTRATOS    │    │
+│  └───────┬───────────┘                  │  LoginData, UserData...    │    │
 │          │ usa                          └────────────────────────────┘    │
 │          ▼                                                                  │
 │  ┌───────────────────┐                  ┌────────────────────────────┐    │
@@ -289,76 +277,34 @@ cucumber-js inicia escenario
    └──────────────────────────┘
               │
               ▼
-   Genera: reports/cucumber-report.json
-           test-results/videos/*.webm
-           test-results/traces/*.zip
+   reports/cucumber-report.json
+   test-results/videos/*.webm
+   test-results/traces/*.zip
 ```
 
-## Diagrama — Flujo de Captura Visual (StepLogger)
-
-```
-Page Object (ej: LoginPage.fillUsername)
-         │
-         │ llama a BasePage.fillField()
-         ▼
-┌────────────────────────────────────────┐
-│            BasePage                    │
-│                                        │
-│  1. Ejecuta acción Playwright          │
-│     page.locator(...).fill(value)      │
-│                                        │
-│  2. Toma screenshot                    │
-│     page.screenshot() → Buffer        │
-│                                        │
-│  3. Llama renderCard()                 │
-│     StepLogger.renderCard(            │
-│       stepIndex, type='FILL',          │
-│       description, code,              │
-│       screenshotBase64, failed)        │
-└────────────────┬───────────────────────┘
-                 │
-                 ▼
-┌────────────────────────────────────────┐
-│         StepLogger.renderCard()        │
-│                                        │
-│  Genera HTML:                          │
-│  <div style="...">                     │
-│    #02 FILL — Ingresa Username         │
-│    <code>value</code>                  │
-│    <img src="data:image/png;base64,..."│
-│  </div>                                │
-└────────────────┬───────────────────────┘
-                 │
-                 ▼
-          this.attach(html, 'text/html')
-          [embebido en cucumber-report.json]
-```
-
-## Componentes del Módulo 1 — Descripción
+## Componentes del Módulo 1
 
 | Componente | Archivo | Responsabilidad |
 |---|---|---|
-| **BasePage** | `src/pages/BasePage.ts` | Clase base abstracta. Encapsula acciones Playwright (fill, click, select) con captura automática de screenshots y generación de HTML cards |
-| **PageHelpers** | `src/pages/PageHelpers.ts` | Assertions y navegación reutilizables: URL matching, texto en locators, validación XSS, manejo de SPAs |
-| **LoginPage** | `src/pages/LoginPage.ts` | Page Object específico del módulo Login de OrangeHRM. Todos los localizadores y flujos de login |
-| **CustomWorld** | `src/support/world.ts` | Context compartido de Cucumber. Almacena browser/page/context y provee cache de Page Objects |
-| **hooks.ts** | `src/support/hooks.ts` | Ciclo de vida: abre/cierra browser, captura evidencia (video, trace, screenshot) según resultado del escenario |
-| **StepLogger** | `core/framework_actions/StepLogger.ts` | Genera HTML cards con screenshots embebidos en base64. Renderiza tarjetas de timing, pasos omitidos y pasos con error |
-| **JsonDataManagement** | `core/data_management/JsonDataManagement.ts` | Lee datos de prueba desde `jsonData/{env}/*.json` con tipado TypeScript. Búsqueda por `id` o por campo |
-| **EnvironmentSettings** | `core/settings/EnvironmentSettings.ts` | Carga `.env.{env}` y expone `baseURL` y `env` validados |
-| **browser.config** | `src/config/browser.config.ts` | Opciones de Playwright: headless en CI, viewport, grabación de video |
-| **LoginData** | `core/interfaces/LoginData.ts` | Interface TypeScript para datos de login desde JSON |
+| **BasePage** | `src/pages/BasePage.ts` | Clase base abstracta. Encapsula acciones Playwright con captura automática de screenshots y HTML cards |
+| **PageHelpers** | `src/pages/PageHelpers.ts` | Assertions y navegación reutilizables: URL matching, texto en locators, validación XSS |
+| **LoginPage** | `src/pages/LoginPage.ts` | Page Object del módulo Login. Localizadores y flujos de login |
+| **CustomWorld** | `src/support/world.ts` | Context compartido de Cucumber. Cache de Page Objects |
+| **hooks.ts** | `src/support/hooks.ts` | Ciclo de vida: browser, evidencias (video, trace, screenshot) |
+| **StepLogger** | `core/framework_actions/StepLogger.ts` | Genera HTML cards con screenshots en base64. Cards de timing y pasos omitidos |
+| **JsonDataManagement** | `core/data_management/JsonDataManagement.ts` | Lee datos de prueba desde `jsonData/{env}/*.json` por `id` |
+| **EnvironmentSettings** | `core/settings/EnvironmentSettings.ts` | Carga `.env.{env}`, expone `baseURL` y `env` validados |
+| **LoginHelper** | `src/support/LoginHelper.ts` | Utility estático de login sin captura visual — para precondiciones de Background |
 | **Feature files** | `src/test/features/**/*.feature` | Especificaciones BDD en Gherkin |
 | **Step Definitions** | `src/test/stepsDefinitions/**/*.ts` | Vincula Gherkin con Page Objects y Data Management |
-| **jsonData/** | `jsonData/{env}/*.json` | Datos de prueba por ambiente (qa, cert) |
 
 ---
 
 ---
 
-# MÓDULO 2 — QA Bridge (Integración con herramientas de gestión)
+# MÓDULO 2 — QA Bridge (Integración Multi-Adaptador)
 
-**Responsabilidad:** Leer los resultados de las pruebas y sincronizarlos con la herramienta de gestión de proyectos. Crear issues, subir evidencias, gestionar estados y generar reportes en Jira.
+**Responsabilidad:** Leer los resultados de las pruebas y ejecutar las 6 acciones del sistema contra una o más herramientas de gestión. El módulo está diseñado para soportar múltiples adaptadores simultáneos.
 
 ## Diagrama General del Módulo 2
 
@@ -371,56 +317,53 @@ Page Object (ej: LoginPage.fillUsername)
 │         │                                                                   │
 │         ▼                                                                   │
 │  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │  TYPES (Contratos de datos — nunca se modifican)                    │  │
+│  │  CAPA DE TIPOS (Contratos centrales — nunca se modifican)            │  │
 │  │  qa-bridge.types.ts                                                  │  │
-│  │  QACucumberResult │ QARunSummary │ JiraSyncResult │ QAStep           │  │
+│  │  QACucumberResult │ QARunSummary │ SyncResult │ QAStep               │  │
 │  └──────────────────────────────────────────────────────────────────────┘  │
 │         │                                                                   │
 │         ▼                                                                   │
 │  ┌──────────────────┐    ┌──────────────────────────────────────────────┐  │
-│  │  MAPPERS         │    │  UTILS (herramienta-agnósticos)              │  │
-│  │                  │    │                                              │  │
-│  │  CucumberMapper  │    │  case-registry.ts   FeatureTagger.ts        │  │
-│  │  (raw JSON →     │    │  (scenarioId →      (escribe @jira:KEY      │  │
-│  │   QARunSummary)  │    │   issueKey en       en archivos .feature)   │  │
-│  │                  │    │   disco)                                     │  │
-│  │  JiraMapper      │    │                                              │  │
-│  │  (QACucumber →   │    │  card-parser.ts     http.client.ts          │  │
-│  │   ADF payloads)  │    │  (parsea HTML       (Axios + retry          │  │
-│  │                  │    │   cards a structs)   automático)            │  │
-│  └──────────────────┘    └──────────────────────────────────────────────┘  │
-│         │                         │                                         │
-│         └─────────────┬───────────┘                                         │
-│                       ▼                                                     │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │  SERVICES                                                           │   │
-│  │                                                                     │   │
-│  │  JiraService              JiraDashboardService                      │   │
-│  │  (CRUD de issues,         (crea/reutiliza                           │   │
-│  │   uploads, transiciones,   filter + dashboard                      │   │
-│  │   resumen regresión)        + gadgets en Jira)                     │   │
-│  │                                                                     │   │
-│  │  TestRailService (skeleton — pendiente de implementar)              │   │
-│  └──────────────────────────────────────────────────────────────────────┘  │
+│  │  PARSERS         │    │  UTILS (herramienta-agnósticos)              │  │
+│  │  (agnósticos)    │    │                                              │  │
+│  │                  │    │  case-registry.ts     FeatureTagger.ts       │  │
+│  │  CucumberMapper  │    │  scenarioId→issueKey  @tag en .feature       │  │
+│  │  JSON→QARunSummary│   │                                              │  │
+│  │                  │    │  card-parser.ts       http.client.ts         │  │
+│  │  failure-analyzer│    │  HTML cards→structs   Axios+retry            │  │
+│  │  Clasifica fallos│    │                                              │  │
+│  │  framework vs app│    └──────────────────────────────────────────────┘  │
+│  └──────────────────┘                                                       │
 │         │                                                                   │
 │         ▼                                                                   │
 │  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │  CONFIG                                                              │  │
-│  │  jira.config.ts          testrail.config.ts                         │  │
-│  │  (lee .env.{env},        (skeleton)                                  │  │
-│  │   valida requeridas,                                                 │  │
-│  │   exporta JiraConfig)                                                │  │
+│  │  ADAPTADORES (uno o más activos simultáneamente)                     │  │
+│  │                                                                      │  │
+│  │  ┌────────────────────────────────────────────────────────────────┐  │  │
+│  │  │  ADAPTADOR JIRA (✅ Producción)                                │  │  │
+│  │  │                                                                │  │  │
+│  │  │  JiraMapper.ts        → builders ADF (descripción, resumen,   │  │  │
+│  │  │                          bug, tarea, recurrencia)              │  │  │
+│  │  │  JiraService.ts       → CRUD issues, Acciones 1,2,3,5,6      │  │  │
+│  │  │  JiraDashboardService → filtro + dashboard + gadgets          │  │  │
+│  │  │  jira.config.ts       → carga .env.{env}, JiraConfig         │  │  │
+│  │  └────────────────────────────────────────────────────────────────┘  │  │
+│  │                                                                      │  │
+│  │  ┌────────────────────────────────────────────────────────────────┐  │  │
+│  │  │  ADAPTADOR TESTRAIL (⚙️ Pendiente)                             │  │  │
+│  │  │  TestRailMapper → builders en formato TestRail                 │  │  │
+│  │  │  TestRailService → CRUD test cases, runs, results              │  │  │
+│  │  │  testrail.config.ts → configuración                            │  │  │
+│  │  └────────────────────────────────────────────────────────────────┘  │  │
 │  └──────────────────────────────────────────────────────────────────────┘  │
-│                                                                             │
-│  OUTPUT → Jira Cloud API                                                    │
-│           Issues creados/actualizados                                       │
-│           Screenshots adjuntos                                              │
-│           Resumen de regresión (upsert)                                     │
-│           Dashboard con gadgets                                             │
+│         │                                                                   │
+│         ▼                                                                   │
+│  OUTPUT → Jira Cloud API / TestRail API / Azure DevOps API / ...           │
+│           Acciones 1–6 ejecutadas según config de cada adaptador           │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Diagrama de Clases — Services
+## Diagrama de Clases — JiraService
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -429,243 +372,361 @@ Page Object (ej: LoginPage.fillUsername)
 │ - client: AxiosInstance                                      │
 │ - cfg: JiraConfig                                            │
 │──────────────────────────────────────────────────────────────│
+│  [Infraestructura]                                           │
 │ + verifyConnection(): Promise<void>                          │
+│ - getIssueLinks(key): Promise<string[]>     ← privado        │
+│ - transitionTo(key, names[]): Promise<void> ← privado        │
 │                                                              │
-│   [Búsqueda]                                                 │
+│  ── ACCIÓN 1: Registro de Caso ─────────────────────────────│
 │ + findExistingIssue(scenario): Promise<JiraIssueRef|null>    │
-│ + findRegressionSummaryIssue(): Promise<JiraIssueRef|null>   │
-│                                                              │
-│   [Creación]                                                 │
 │ + createIssue(scenario): Promise<JiraIssueRef>               │
-│ + createRegressionSummaryIssue(...): Promise<JiraIssueRef>   │
-│                                                              │
-│   [Actualización]                                            │
-│ + updateDescription(key, scenario, attachmentMap)            │
-│ + updateLabels(key, status)                                  │
-│ + updateRegressionSummaryIssue(key, ...): Promise<void>      │
-│                                                              │
-│   [Adjuntos]                                                 │
+│ + linkToParent(caseKey): Promise<void>                       │
 │ + attachScreenshots(key, scenario): Promise<AttachmentInfo[]>│
+│ + updateDescription(key, scenario, map): Promise<void>       │
 │                                                              │
-│   [Relaciones]                                               │
-│ + linkToParent(issueKey): Promise<void>                      │
-│                                                              │
-│   [Estados]                                                  │
+│  ── ACCIÓN 2: Actualización en Regresión ───────────────────│
+│ + updateLabels(key, status): Promise<void>                   │
 │ + transitionToDone(key): Promise<void>                       │
 │ + transitionToFailed(key): Promise<void>                     │
 │ + transitionToInProgress(key): Promise<void>                 │
-└──────────────────────────────────────────────────────────────┘
-
-┌──────────────────────────────────────────────────────────────┐
-│                   JiraDashboardService                       │
-│──────────────────────────────────────────────────────────────│
-│ - client: AxiosInstance                                      │
-│ - cfg: JiraConfig                                            │
-│──────────────────────────────────────────────────────────────│
-│ + createOrUpdate(): Promise<string>  ← retorna URL dashboard │
 │                                                              │
-│   [Internos]                                                 │
-│ - findOrCreateFilter(): Promise<string>                      │
-│ - findOrCreateDashboard(): Promise<string>                   │
-│ - addGadgets(dashboardId): Promise<void>                     │
+│  ── ACCIÓN 3: Test Run de Regresión ────────────────────────│
+│ + findRegressionSummaryIssue(): Promise<JiraIssueRef|null>   │
+│ + createRegressionSummaryIssue(...): Promise<JiraIssueRef>   │
+│ + updateRegressionSummaryIssue(key, ...): Promise<void>      │
+│                                                              │
+│  ── ACCIONES 5 y 6: Fallos ─────────────────────────────────│
+│ + findLinkedFailureIssue(key, type): Promise<JiraIssueRef|null>│
+│ + findParentStoryAssignee(key): Promise<string|null>         │
+│ + createRefactoringTask(key, scenario, analysis, map?)       │
+│ + createBug(key, scenario, analysis, devId?, map?)           │
+│ + addFailureRecurrenceComment(key, scenario, analysis, date) │
+│                                                              │
+│  ── Deprecado (no usar) ────────────────────────────────────│
+│ + addComment(key, scenario, map?)  ← reemplazado por        │
+│                                       updateDescription      │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-## Diagrama de Clases — Mappers
+## Diagrama de Clases — JiraMapper
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                      CucumberMapper                          │
-│                    (herramienta-agnóstico)                   │
-│──────────────────────────────────────────────────────────────│
-│ parseCucumberReport(path) → QARunSummary                     │
-│                                                              │
-│  INPUT:  reports/cucumber-report.json (raw Cucumber format)  │
-│  OUTPUT: QARunSummary {                                      │
-│            scenarios: QACucumberResult[]                     │
-│            total, passed, failed, skipped                    │
-│          }                                                   │
-│                                                              │
-│  Algoritmo interno:                                          │
-│  1. feature[] → scenarios[] (filtra backgrounds)            │
-│  2. steps: raw → QAStep (keyword, text, status, duration)   │
-│  3. screenshots: extraídos de embeddings image/* o HTML     │
-│  4. htmlCards: embeddings text/html decodificados           │
-│  5. status: calculado desde steps (worst-case wins)         │
-└──────────────────────────────────────────────────────────────┘
-
 ┌──────────────────────────────────────────────────────────────┐
 │                       JiraMapper                             │
 │                 (específico de Jira — ADF)                   │
 │──────────────────────────────────────────────────────────────│
-│  [Detección]                                                 │
+│  [Detección de modo]                                         │
 │  extractJiraTag(tags[]) → string | undefined                 │
 │  isRegressionRun(tags[]) → boolean                           │
 │                                                              │
-│  [Builders de issue]                                         │
-│  buildNewIssuePayload(scenario, cfg) → ADF object            │
-│  buildNewIssueDescription(scenario, attachMap?) → ADF        │
+│  ── ACCIÓN 1 ───────────────────────────────────────────────│
+│  buildNewIssuePayload(scenario, cfg) → object                │
+│  buildNewIssueDescription(scenario, map?) → ADF              │
 │                                                              │
-│  [Builders de regresión]                                     │
-│  buildCommentBody(scenario, date, attachMap?) → ADF          │
-│  buildRegressionSummaryPayload(summary, cfg) → ADF           │
-│  buildRegressionSummaryUpdatePayload(summary, cfg) → ADF     │
+│  ── ACCIÓN 2 (comentario — ya no se usa) ───────────────────│
+│  buildCommentBody(scenario, date, map?) → ADF                │
+│                                                              │
+│  ── ACCIÓN 3 ───────────────────────────────────────────────│
+│  buildRegressionSummaryPayload(summary, cfg) → object        │
+│  buildRegressionSummaryUpdatePayload(summary, cfg) → object  │
 │  buildRegressionSummaryDescription(...) → ADF                │
 │                                                              │
-│  [Builders de relación y transición]                         │
-│  buildIssueLinkPayload(issueKey, parentKey) → object         │
-│  buildTransitionPayload(transitionId) → object               │
+│  ── ACCIÓN 5 ───────────────────────────────────────────────│
+│  buildRefactoringTaskPayload(key, scenario, analysis, cfg)   │
+│  buildRefactoringTaskDescription(key, scenario, analysis, cfg│
 │                                                              │
-│  [ADF Helpers internos]                                      │
+│  ── ACCIÓN 6 ───────────────────────────────────────────────│
+│  buildBugPayload(key, scenario, analysis, devId, cfg)        │
+│  buildBugDescription(key, scenario, analysis, cfg) → ADF     │
+│                                                              │
+│  ── Recurrencia (Acciones 5 y 6) ───────────────────────────│
+│  buildRecurrenceCommentBody(scenario, analysis, date) → ADF  │
+│                                                              │
+│  ── Helpers ADF internos ───────────────────────────────────│
 │  adfDoc, adfHeading, adfParagraph, adfText, adfLink         │
 │  adfCodeBlock, adfPanel, adfDivider                         │
 │  adfTable, adfTableRow, adfTableHeader, adfTableCell        │
+│  buildFailureAnalysisSection()  ← sección ADF del análisis  │
+│  buildReproductionStepsSection() ← pasos de reproducción    │
+│  ── Relación y transición ─────────────────────────────────│
+│  buildIssueLinkPayload(key, parentKey) → object              │
+│  buildTransitionPayload(transitionId) → object               │
+└──────────────────────────────────────────────────────────────┘
+```
+
+## Diagrama de Clases — failure-analyzer
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    failure-analyzer.ts                       │
+│              (herramienta-agnóstico — NO TOCAR)              │
+│──────────────────────────────────────────────────────────────│
+│  FailureClassification = 'framework' | 'application'        │
+│                                                              │
+│  FrameworkErrorCategory:                                     │
+│    'timeout' | 'element-not-found' | 'strict-mode'          │
+│    'page-crash' | 'network-error' | 'type-error'            │
+│    'unknown-framework'                                       │
+│                                                              │
+│  ApplicationErrorCategory:                                   │
+│    'assertion-text' | 'assertion-visibility'                 │
+│    'assertion-url' | 'assertion-value'                       │
+│    'assertion-generic' | 'unknown-application'              │
+│                                                              │
+│  FailureAnalysis {                                           │
+│    classification: FailureClassification                     │
+│    errorCategory: ErrorCategory                              │
+│    errorTitle: string         ← descripción legible          │
+│    errorDetail: string        ← mensaje completo             │
+│    failedStep: QAStep | null  ← step exacto                  │
+│    failedStepIndex: number                                   │
+│    lastSuccessfulStep: QAStep | null                         │
+│    reproductionSteps: string[] ← todos los steps con emoji   │
+│    suggestedFix: string        ← corrección sugerida         │
+│  }                                                           │
+│──────────────────────────────────────────────────────────────│
+│  analyzeFailure(scenario: QACucumberResult): FailureAnalysis │
+│                                                              │
+│  Patrones framework (en orden de prioridad):                 │
+│    TimeoutError | Timeout Xms            → timeout           │
+│    strict mode | resolved to N elements  → strict-mode       │
+│    locator not found | 0 elements        → element-not-found │
+│    Target closed | browser disconnected  → page-crash        │
+│    net::ERR_ | ECONNREFUSED              → network-error     │
+│    TypeError | ReferenceError            → type-error        │
+│                                                              │
+│  Patrones application (si no matchea framework):             │
+│    toContainText | toHaveText            → assertion-text    │
+│    toBeVisible | toBeHidden              → assertion-visibility│
+│    toHaveURL | toMatchURL                → assertion-url     │
+│    toHaveValue | toBe( | toEqual(        → assertion-value   │
+│    expect( | Expected...Received         → assertion-generic  │
 └──────────────────────────────────────────────────────────────┘
 ```
 
 ## Diagrama de Clases — Utils
 
 ```
-┌──────────────────────────────────────────────┐
-│              case-registry.ts                │
-│           (herramienta-agnóstico)            │
-│──────────────────────────────────────────────│
-│  Almacena en: reports/.jira/case-registry.dat│
-│  Formato: { scenarioId: CaseEntry }          │
-│                                              │
-│  CaseEntry {                                 │
-│    issueKey: string                          │
-│    createdAt: string (ISO)                   │
-│    lastSyncedAt: string (ISO)                │
-│  }                                           │
-│──────────────────────────────────────────────│
-│  getIssueKey(scenarioId) → string|undefined  │
-│  setIssueKey(scenarioId, issueKey) → void    │
-│  touchSync(scenarioId) → void                │
-└──────────────────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│              case-registry.ts            │
+│           (herramienta-agnóstico)        │
+│──────────────────────────────────────────│
+│  Almacena en: reports/.jira/case-registry.dat
+│  Formato: { scenarioId: CaseEntry }      │
+│                                          │
+│  CaseEntry {                             │
+│    issueKey: string                      │
+│    createdAt: string (ISO)               │
+│    lastSyncedAt: string (ISO)            │
+│  }                                       │
+│──────────────────────────────────────────│
+│  getIssueKey(scenarioId) → string|undef  │
+│  setIssueKey(scenarioId, key) → void     │
+│  touchSync(scenarioId) → void            │
+└──────────────────────────────────────────┘
 
-┌──────────────────────────────────────────────┐
-│              card-parser.ts                  │
-│           (herramienta-agnóstico)            │
-│──────────────────────────────────────────────│
-│  ParsedStepCard {                            │
-│    stepIndex: number                         │
-│    type: string (NAVIGATE/FILL/CLICK...)     │
-│    description: string                       │
-│    code: string                              │
-│    failed: boolean                           │
-│  }                                           │
-│                                              │
-│  ParsedTimingCard {                          │
-│    elapsedMs: number                         │
-│    thresholdMs: number                       │
-│    passed: boolean                           │
-│  }                                           │
-│──────────────────────────────────────────────│
-│  parseAllCards(htmlCards[]) → {              │
-│    steps: ParsedStepCard[]                   │
-│    timing: ParsedTimingCard | null           │
-│  }                                           │
-└──────────────────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│              card-parser.ts              │
+│           (herramienta-agnóstico)        │
+│──────────────────────────────────────────│
+│  ParsedStepCard {                        │
+│    stepIndex: number                     │
+│    type: NAVIGATE|FILL|CLICK|ASSERT...   │
+│    description: string                   │
+│    code: string                          │
+│    failed: boolean                       │
+│  }                                       │
+│  ParsedTimingCard {                      │
+│    elapsedMs: number                     │
+│    thresholdMs: number                   │
+│    passed: boolean                       │
+│  }                                       │
+│──────────────────────────────────────────│
+│  parseAllCards(htmlCards[]) → {          │
+│    steps: ParsedStepCard[]               │
+│    timing: ParsedTimingCard | null       │
+│  }                                       │
+└──────────────────────────────────────────┘
 
-┌──────────────────────────────────────────────┐
-│              FeatureTagger.ts                │
-│           (herramienta-agnóstico)            │
-│──────────────────────────────────────────────│
-│  tagScenarioInFeature(                       │
-│    featureUri,                               │
-│    scenarioName,                             │
-│    issueKey                                  │
-│  ) → boolean                                 │
-│                                              │
-│  Lee archivo .feature, localiza el           │
-│  scenario por nombre e inserta/actualiza:    │
-│  @jira:ISSUE-123                             │
-│  Scenario: Nombre del scenario               │
-└──────────────────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│              FeatureTagger.ts            │
+│           (herramienta-agnóstico)        │
+│──────────────────────────────────────────│
+│  tagScenarioInFeature(                   │
+│    featureUri,                           │
+│    scenarioName,                         │
+│    issueKey                              │
+│  ) → boolean                             │
+│                                          │
+│  Inserta @jira:KEY antes del Scenario    │
+│  en el archivo .feature                  │
+└──────────────────────────────────────────┘
 
-┌──────────────────────────────────────────────┐
-│              http.client.ts                  │
-│──────────────────────────────────────────────│
-│  createJiraClient(url, email, token)         │
-│    → AxiosInstance (Basic Auth, API v3)      │
-│                                              │
-│  postJson<T>(client, url, body)              │
-│  putJson<T>(client, url, body)               │
-│  getJson<T>(client, url)                     │
-│  postFormData<T>(client, url, form)          │
-│                                              │
-│  Retry automático:                           │
-│  - 3 intentos máx                           │
-│  - Solo en 429 y 5xx                        │
-│  - Delay: 1500ms × intento                  │
-│  - Timeout: 30s por request                 │
-└──────────────────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│              http.client.ts              │
+│──────────────────────────────────────────│
+│  createJiraClient(url, email, token)     │
+│    → AxiosInstance (Basic Auth, v3)      │
+│                                          │
+│  postJson<T>(client, url, body)          │
+│  putJson<T>(client, url, body)           │
+│  getJson<T>(client, url)                 │
+│  postFormData<T>(client, url, form)      │
+│                                          │
+│  Retry automático:                       │
+│  - 3 intentos máx                       │
+│  - Solo en 429 y 5xx                    │
+│  - Delay: 1500ms × intento              │
+│  - Timeout: 30s por request             │
+└──────────────────────────────────────────┘
 ```
 
-## Diagrama — Flujo de Sincronización (jira-sync)
+## Diagrama — Las 6 Acciones del Sistema
 
 ```
-Para cada QACucumberResult en QARunSummary:
+Para cada QACucumberResult:
          │
          ▼
-  ┌──────────────────────────┐
-  │ extractJiraTag(tags)     │ → ¿tiene @jira:KEY-123?
-  │ getIssueKey(scenarioId)  │ → ¿está en el registry?
-  │ isRegressionRun(tags)    │ → ¿tiene @Regresion?
-  └──────────┬───────────────┘
-             │
-     ┌───────┼────────────────────────────────┐
-     │       │                                │
-     ▼       ▼                                ▼
- existe   existe                          no existe
- + regresión  + NO regresión
-     │       │                                │
-     ▼       ▼                                ▼
- ACTUALIZAR OMITIR                       CREAR NUEVO
-             (retest)
-     │                                        │
-     ▼                                        ▼
-  handleRegressionScenario()          handleNewScenario()
-     │                                        │
-     ├─ attachScreenshots()               ├─ findExistingIssue()
-     │    → AttachmentInfo[]              │    (deduplicación)
-     │                                   │
-     ├─ updateDescription()              ├─ createIssue()
-     │    (ADF con evidencias             │
-     │     + análisis del fallo)         ├─ linkToParent()
-     │
-     ├─ updateLabels(status)             ├─ attachScreenshots()
-     │
-     ├─ transitionToDone()              ├─ updateDescription()
-     │  o transitionToFailed()          │    (con links a adjuntos)
-     │
-     └─ touchSync()                     ├─ transitionToDone/Failed()
-          (actualiza registry)          │
-                                        ├─ setIssueKey()
-                                        │    (guarda en registry)
-                                        │
-                                        └─ tagScenarioInFeature()
-                                             (@jira:KEY en .feature)
+  ┌──────────────────────────────────────────────────────────────┐
+  │  Detección de modo                                           │
+  │  extractIssueTag(tags) → ¿tiene @jira:KEY?                   │
+  │  getIssueKey(scenarioId) → ¿está en registry?                │
+  │  isRegressionRun(tags) → ¿tiene @Regresion?                  │
+  └──────┬─────────────────────────┬───────────────────┬─────────┘
+         │                         │                   │
+  key + @Regresion          key + NO @Regresion    sin key
+         │                         │                   │
+         ▼                         ▼                   ▼
+  ┌─────────────────┐    ┌─────────────────┐  ┌────────────────────────┐
+  │  ACCIÓN 2       │    │    OMITIR       │  │     ACCIÓN 1           │
+  │  Actualizar en  │    │    (retest)     │  │  Registrar Caso Nuevo  │
+  │  Regresión      │    └─────────────────┘  │                        │
+  │                 │                         │  findExistingCase()    │
+  │  attachScreens  │                         │  createCase()          │
+  │  updateDesc     │                         │  linkToParent()        │
+  │  updateLabels   │                         │  attachScreenshots()   │
+  │  transition     │                         │  updateDescription()   │
+  │  touchSync      │                         │  transition()          │
+  │     │           │                         │  setIssueKey()         │
+  │     │           │                         │  tagFeature()          │
+  └─────┼───────────┘                         └────────────────────────┘
+        │
+        │ Si status === 'failed':
+        ▼
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  ACCIÓN 4 — Análisis y Clasificación del Fallo                  │
+  │  failure-analyzer.analyzeFailure(scenario) → FailureAnalysis   │
+  │                                                                 │
+  │  classification = 'framework'    classification = 'application' │
+  │  (TimeoutError, strict mode,     (toBeLessThan, toContainText,  │
+  │   element not found, TypeError,   toHaveURL, toBeVisible,       │
+  │   net::ERR_, page crash)          AssertionError, expect())     │
+  └───────────┬─────────────────────────────────┬───────────────────┘
+              │                                 │
+              ▼                                 ▼
+  ┌─────────────────────┐             ┌─────────────────────────────┐
+  │  findLinkedFailure  │             │   findLinkedFailureIssue    │
+  │  Issue(key, 'ref.') │             │   (key, 'bug')              │
+  └──────┬──────────────┘             └──────────┬──────────────────┘
+         │                                       │
+  ┌──────┴──────────────┐             ┌──────────┴──────────────────┐
+  │ ya existe?          │             │ ya existe?                  │
+  │  Sí → RECURRENCIA   │             │  Sí → RECURRENCIA           │
+  │  No → ver modo:     │             │  No → ACCIÓN 6              │
+  └──────┬──────────────┘             └──────────┬──────────────────┘
+         │                                       │
+  ┌──────┴──────────────────────┐     ┌──────────┴──────────────────┐
+  │  QA_AGENT_MODE=false        │     │  ACCIÓN 6 — Bug             │
+  │      │                      │     │                             │
+  │  ACCIÓN 5 — Refactoring     │     │  findParentStoryAssignee()  │
+  │  createRefactoringTask()    │     │  (GET issuelinks →          │
+  │  Docs: análisis + pasos +   │     │   GET parent assignee)      │
+  │  sugerencia de corrección   │     │                             │
+  │  Labels: qa-refactoring     │     │  createBug()                │
+  │  Link → test case           │     │  Docs: qué se probaba,      │
+  │                             │     │  hasta dónde se llegó,      │
+  │  QA_AGENT_MODE=true         │     │  pasos de reproducción,     │
+  │  [señal para agente —       │     │  análisis del error         │
+  │   corrige código y re-run]  │     │  Labels: qa-failure-bug     │
+  └─────────────────────────────┘     │  Link → test case           │
+                                      │  Assignee: developer        │
+                                      │  de la historia padre       │
+                                      └─────────────────────────────┘
 
 Al finalizar todos los scenarios:
          │
          ▼
-  ┌──────────────────────────────────────────┐
-  │      UPSERT Resumen de Regresión         │
-  │                                          │
-  │  findRegressionSummaryIssue()            │
-  │       │                                  │
-  │   existe?──Sí──► updateRegressionSummary │
-  │       │                                  │
-  │      No                                  │
-  │       └──────► createRegressionSummary   │
-  │                                          │
-  │  El resumen incluye:                     │
-  │  - Tabla: ejecutor, fecha, módulos       │
-  │  - Tabla: todos los casos + estado       │
-  │  - Sección: análisis de fallos           │
-  └──────────────────────────────────────────┘
+  ┌───────────────────────────────────────────────────────────────┐
+  │  ACCIÓN 3 — Test Run de Regresión (upsert)                    │
+  │                                                               │
+  │  findRegressionSummaryIssue()                                 │
+  │       │                                                       │
+  │  existe?──Sí──► updateRegressionSummaryIssue()                │
+  │       │          (reconstruye descripción completa)           │
+  │      No                                                       │
+  │       └──────► createRegressionSummaryIssue()                 │
+  │                                                               │
+  │  El resumen incluye:                                          │
+  │  ─ Tabla info: ejecutor, fecha, módulos, total/pass/fail      │
+  │  ─ Tabla resultados: todos los casos con link al issue        │
+  │  ─ Sección fallos: análisis por cada caso fallido             │
+  └───────────────────────────────────────────────────────────────┘
+```
+
+## Diagrama — Deduplicación en Acciones 5 y 6
+
+```
+scenario.status === 'failed' && análisis completado
+         │
+         ▼
+  GET /issue/{testCaseKey}?fields=issuelinks
+         │
+         ▼
+  linkedKeys = [KEY-X, KEY-Y, KEY-Z, ...]
+         │
+         ▼
+  JQL: key in (KEY-X, KEY-Y, ...) 
+       AND labels = "qa-failure-bug"  ← o "qa-refactoring"
+       AND status not in (Done, Resuelto, Finalizada, Closed)
+         │
+  ┌──────┴────────────────────────────────────────┐
+  │ ¿encontró issue abierto?                      │
+  │                                               │
+  │  SÍ                         NO               │
+  │   │                          │               │
+  │   ▼                          ▼               │
+  │ addFailureRecurrenceComment  createBug()      │
+  │ (POST comment en existente)  o               │
+  │                              createRefactoring│
+  │                              Task()           │
+  └───────────────────────────────────────────────┘
+```
+
+## Diagrama — Asignación del Developer (Acción 6)
+
+```
+createBug() necesita asignar al developer
+         │
+         ▼
+  findParentStoryAssignee(testCaseKey)
+         │
+         ▼
+  GET /issue/{testCaseKey}?fields=issuelinks
+         │
+         ▼
+  Para cada issue vinculado:
+    GET /issue/{linkedKey}?fields=issuetype,assignee
+    │
+    ¿issuetype = Story | Epic | Historia?
+    │
+    Sí → extraer assignee.accountId → return
+    No → siguiente issue vinculado
+         │
+  Si ninguno tiene assignee:
+    Fallback → {TOOL}_ASSIGNEE_ACCOUNT_ID
+         │
+         ▼
+  createBug({ assignee: { accountId: devAccountId } })
 ```
 
 ## Diagrama — Config y Variables de Entorno
@@ -685,46 +746,44 @@ Al finalizar todos los scenarios:
 │  JIRA_TEAM_ID=uuid                  (opcional)
 │  JIRA_DUE_DATE_DAYS=7               (opcional)
 │  JIRA_EXECUTOR_NAME=Maricarmen      (opcional)
+│  JIRA_BUG_ISSUE_TYPE=Task           (default: Task — cambiar si proyecto tiene Bug)
+│  QA_AGENT_MODE=false                (false=crea tareas, true=agente corrige código)
 │
 ▼
 ┌──────────────────────────────────────────────────────────┐
 │                    jira.config.ts                        │
-│                                                          │
 │  loadJiraConfig() → JiraConfig {                         │
 │    baseUrl, email, apiToken,                             │
 │    projectKey, parentIssueKey, epicKey,                  │
 │    enabled,                                              │
 │    assigneeAccountId?, sprintUrl?, teamId?,              │
-│    dueDateDays?, executorName?                           │
+│    dueDateDays?, executorName?, bugIssueType?            │
 │  }                                                       │
-│                                                          │
-│  requireEnv(key) → lanza error si no existe             │
-│  optionalEnv(key) → undefined si no existe              │
 └──────────────────────────────────────────────────────────┘
-         │
-         ▼ inyectado en constructor
+         │ inyectado en constructor
+         ▼
 ┌────────────────┐    ┌───────────────────────┐
 │  JiraService   │    │  JiraDashboardService  │
-│  (cfg: Config) │    │  (cfg: Config)         │
 └────────────────┘    └───────────────────────┘
 ```
 
-## Componentes del Módulo 2 — Descripción
+## Componentes del Módulo 2
 
 | Componente | Archivo | Responsabilidad |
 |---|---|---|
-| **qa-bridge.types** | `types/qa-bridge.types.ts` | Contratos de datos centrales. Nunca se modifican. Define QACucumberResult, QARunSummary, JiraSyncResult |
-| **CucumberMapper** | `mappers/CucumberMapper.ts` | Parsea el JSON raw de Cucumber y lo transforma al contrato QARunSummary |
-| **JiraMapper** | `mappers/JiraMapper.ts` | Construye todos los payloads Jira en formato ADF. Builders de descripción, comentario, resumen |
-| **JiraService** | `services/JiraService.ts` | Cliente Jira de alto nivel. CRUD de issues, uploads, transiciones, búsquedas, resumen de regresión |
-| **JiraDashboardService** | `services/JiraDashboardService.ts` | Crea y configura el dashboard Jira con filtro y gadgets |
+| **qa-bridge.types** | `types/qa-bridge.types.ts` | Contratos de datos centrales. Nunca se modifican. |
+| **CucumberMapper** | `mappers/CucumberMapper.ts` | Parsea JSON raw de Cucumber → QARunSummary |
+| **failure-analyzer** | `utils/failure-analyzer.ts` | Clasifica fallos en framework vs application. Acción 4. Herramienta-agnóstico. |
+| **JiraMapper** | `mappers/JiraMapper.ts` | Builders ADF para todas las acciones (Acción 1, 2, 3, 5, 6) |
+| **JiraService** | `services/JiraService.ts` | Cliente Jira de alto nivel. Implementa las Acciones 1, 2, 3, 5, 6. |
+| **JiraDashboardService** | `services/JiraDashboardService.ts` | Crea y configura dashboard Jira con filtro y gadgets |
 | **TestRailService** | `services/TestRailService.ts` | Skeleton para futura integración con TestRail |
-| **jira.config** | `config/jira.config.ts` | Carga y valida variables de entorno Jira. Exporta JiraConfig tipado |
-| **case-registry** | `utils/case-registry.ts` | Persistencia scenarioId → issueKey en disco. Previene duplicados entre ejecuciones |
-| **card-parser** | `utils/card-parser.ts` | Parsea HTML cards de evidencias a structs tipados (ParsedStepCard, ParsedTimingCard) |
-| **FeatureTagger** | `FeatureTagger.ts` | Escribe el tag `@jira:KEY` en el archivo .feature después de crear un issue |
-| **http.client** | `utils/http.client.ts` | Axios configurado con Basic Auth, retry automático (429/5xx) y soporte FormData |
-| **DashboardGenerator** | `DashboardGenerator.ts` | Genera dashboard HTML standalone local con métricas de la suite |
+| **jira.config** | `config/jira.config.ts` | Carga y valida variables de entorno Jira |
+| **case-registry** | `utils/case-registry.ts` | Persistencia scenarioId → issueKey. Previene duplicados |
+| **card-parser** | `utils/card-parser.ts` | Parsea HTML cards → ParsedStepCard[], ParsedTimingCard |
+| **FeatureTagger** | `FeatureTagger.ts` | Escribe `@jira:KEY` en el archivo .feature |
+| **http.client** | `utils/http.client.ts` | Axios con Basic Auth, retry 429/5xx, timeout 30s |
+| **DashboardGenerator** | `DashboardGenerator.ts` | Dashboard HTML local con métricas de la suite |
 
 ---
 
@@ -732,7 +791,7 @@ Al finalizar todos los scenarios:
 
 # MÓDULO 3 — Pipeline y Orquestador
 
-**Responsabilidad:** Coordinar la ejecución completa del ciclo: correr tests, generar reportes y sincronizar con Jira, en el orden correcto y con manejo apropiado de errores.
+**Responsabilidad:** Coordinar la ejecución del ciclo completo: correr tests → generar reportes → sincronizar con herramientas de gestión. En el orden correcto y con manejo apropiado de errores.
 
 ## Diagrama General del Módulo 3
 
@@ -746,12 +805,12 @@ Al finalizar todos los scenarios:
 │  │                                                                     │   │
 │  │  node scripts/run-tests.js [env] [extraEnvVars]                     │   │
 │  │                                                                     │   │
-│  │  PASO 1          PASO 2            PASO 3                           │   │
-│  │  Cucumber ──────► HTML Reporter ──► Jira Sync                       │   │
-│  │  (exitCode)      (continúa si      (continúa si                     │   │
-│  │     │             falla)            falla)                          │   │
+│  │  PASO 1           PASO 2            PASO 3                          │   │
+│  │  Cucumber ───────► HTML Reporter ──► Jira Sync                      │   │
+│  │  (testExitCode)   (continúa si      (continúa si                    │   │
+│  │     │              falla)            falla)                         │   │
 │  │     │                                                               │   │
-│  │     └──────────────────────────────────────────► process.exit()     │   │
+│  │     └──────────────────────────────────────────► process.exit()    │   │
 │  │                                    (exit code de tests, no de sync) │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
@@ -759,155 +818,38 @@ Al finalizar todos los scenarios:
 │  │    cucumber.js       │   │     report.ts        │                       │
 │  │  (Configuración)     │   │  (HTML Reporter)     │                       │
 │  │                      │   │                      │                       │
-│  │  Rutas de features   │   │  Genera HTML bonito  │                       │
-│  │  Rutas de steps      │   │  desde JSON          │                       │
-│  │  Paralelismo (4)     │   │  Abre en browser     │                       │
-│  │  Retry (CI: 1, 0)    │   │  si no es CI         │                       │
+│  │  Features: src/...   │   │  Lee JSON de Cucumber│                       │
+│  │  Steps: src/...      │   │  Genera HTML bonito  │                       │
+│  │  Paralelo: 4 workers │   │  Abre en browser     │                       │
+│  │  Retry CI: 1         │   │  si no es CI         │                       │
 │  │  Formato JSON        │   │                      │                       │
 │  └──────────────────────┘   └──────────────────────┘                       │
 │                                                                             │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │                   scripts/jira-sync.ts                              │   │
-│  │                (Orquestador de integración)                         │   │
+│  │         (Dispatcher de integración — Adaptador Jira)                │   │
 │  │                                                                     │   │
-│  │  1. Carga config (.env.{env})                                       │   │
-│  │  2. Verifica conexión Jira (fail-fast)                              │   │
+│  │  1. Carga JiraConfig (.env.{env})                                   │   │
+│  │  2. Verifica conexión (fail-fast)                                   │   │
 │  │  3. Parsea cucumber-report.json → QARunSummary                      │   │
 │  │  4. Para cada scenario → syncScenario()                             │   │
-│  │  5. Dashboard (si es primera vez)                                   │   │
-│  │  6. Resumen regresión (upsert)                                      │   │
-│  │  7. Imprime estadísticas                                            │   │
+│  │       ├─ Acción 1 (crear) / Acción 2 (actualizar) / omitir         │   │
+│  │       └─ Si failed: Acción 4 → Acción 5 o 6 (con deduplicación)    │   │
+│  │  5. Dashboard (una vez por ambiente)                                │   │
+│  │  6. Acción 3: upsert resumen de regresión                           │   │
+│  │  7. Estadísticas (creados / actualizados / omitidos / errores)      │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Diagrama — Secuencia de Ejecución Completa
-
-```
-  Desarrollador / CI Runner
-         │
-         │  node scripts/run-tests.js qa
-         ▼
-  ┌──────────────────────────────────────────────────────────────────┐
-  │  run-tests.js                                                    │
-  │                                                                  │
-  │  execSync("cross-env ENV=qa cucumber-js")                        │
-  │  │                                                               │
-  │  │  Carga cucumber.js (configuración)                            │
-  │  │  Carga ts-node/register (TypeScript)                          │
-  │  │  Carga hooks.ts (BeforeAll, Before, AfterStep, After)         │
-  │  │  Carga stepsDefinitions/**/*.ts                               │
-  │  │                                                               │
-  │  │  Para cada .feature en src/test/features/**/:                 │
-  │  │    Para cada Scenario:                                        │
-  │  │      BeforeAll (una vez)                                      │
-  │  │      Before → lanza browser                                   │
-  │  │      Ejecuta steps → Page Objects → StepLogger (HTML cards)   │
-  │  │      After → captura evidencia                                │
-  │  │                                                               │
-  │  │  Genera: reports/cucumber-report.json                         │
-  │  │                                                               │
-  │  └─► testExitCode = 0 (todos passed) | 1 (algún fallo)          │
-  │                                                                  │
-  │  execSync("cross-env ENV=qa ts-node report.ts")                  │
-  │  │   Lee cucumber-report.json                                    │
-  │  │   Genera reports/html/index.html                              │
-  │  │   (Error ignorado — no bloquea el pipeline)                   │
-  │                                                                  │
-  │  execSync("cross-env ENV=qa ts-node scripts/jira-sync.ts")       │
-  │  │   Lee cucumber-report.json                                    │
-  │  │   Sincroniza con Jira (ver flujo Módulo 2)                    │
-  │  │   (Error ignorado — no bloquea el pipeline)                   │
-  │                                                                  │
-  │  process.exit(testExitCode)                                      │
-  │  (CI recibe 0 o 1 según los tests, no según Jira)                │
-  └──────────────────────────────────────────────────────────────────┘
-```
-
-## Diagrama — cucumber.js (Configuración)
-
-```
-┌────────────────────────────────────────────────────────────┐
-│                       cucumber.js                          │
-│                                                            │
-│  module.exports = {                                        │
-│    default: {                                              │
-│                                                            │
-│      require: [                                            │
-│        'src/support/**/*.ts',  ← hooks.ts + world.ts       │
-│        'src/test/stepsDefinitions/**/*.ts'                 │
-│      ],                                                    │
-│                                                            │
-│      format: [                                             │
-│        'json:reports/cucumber-report.json',  ← output      │
-│        'summary'                             ← consola     │
-│      ],                                                    │
-│                                                            │
-│      paths: ['src/test/features/**/*.feature'],            │
-│                                                            │
-│      requireModule: ['ts-node/register'],                  │
-│                                                            │
-│      parallel: ENV.PARALLEL || 4,                          │
-│                    ↑                                       │
-│                    4 workers en paralelo por defecto       │
-│                    1 en CI si se setea PARALLEL=1          │
-│                                                            │
-│      retry: ENV.CI ? 1 : 0,                               │
-│               ↑                                            │
-│               1 reintento automático en CI                 │
-│               0 reintentos en desarrollo local             │
-│    }                                                       │
-│  }                                                         │
-└────────────────────────────────────────────────────────────┘
-```
-
-## Diagrama — report.ts (HTML Reporter)
-
-```
-┌────────────────────────────────────────────────────────────┐
-│                        report.ts                           │
-│                                                            │
-│  INPUT:  reports/cucumber-report.json                      │
-│                                                            │
-│  report.generate({                                         │
-│    jsonDir: 'reports',                                     │
-│    reportPath: 'reports/html',                             │
-│    reportName: 'Cucumber Report',                          │
-│    displayDuration: true,                                  │
-│                                                            │
-│    metadata: {                                             │
-│      browser: { name: 'chrome', version: 'latest' },      │
-│      device: 'Local test machine',                         │
-│      platform: { name: 'windows', version: '11' },        │
-│    },                                                      │
-│                                                            │
-│    customData: {                                           │
-│      data: [                                               │
-│        { label: 'Project', value: 'Workflow' },            │
-│        { label: 'Environment', value: ENV },               │
-│        { label: 'SDET Engineer', value: 'Ezequiel M.' },  │
-│        { label: 'Executed', value: new Date() },           │
-│      ]                                                     │
-│    }                                                       │
-│  })                                                        │
-│                                                            │
-│  OUTPUT: reports/html/index.html                           │
-│                                                            │
-│  Si !CI: abre automáticamente en el browser               │
-│    Windows → cmd /c start ""                               │
-│    macOS   → open                                          │
-│    Linux   → xdg-open                                      │
-└────────────────────────────────────────────────────────────┘
-```
-
-## Componentes del Módulo 3 — Descripción
+## Componentes del Módulo 3
 
 | Componente | Archivo | Responsabilidad |
 |---|---|---|
-| **run-tests.js** | `scripts/run-tests.js` | Punto de entrada. Ejecuta en secuencia: cucumber → report → jira-sync. Propaga exit code de cucumber |
-| **cucumber.js** | `cucumber.js` | Configuración de Cucumber: rutas, formatos de salida, paralelismo, retry en CI |
+| **run-tests.js** | `scripts/run-tests.js` | Punto de entrada. Ejecuta: cucumber → report → jira-sync. Propaga exit code de cucumber |
+| **cucumber.js** | `cucumber.js` | Configuración de Cucumber: rutas, formatos de salida, paralelismo (4), retry CI (1) |
 | **report.ts** | `report.ts` | Genera reporte HTML navegable a partir del JSON de Cucumber |
-| **jira-sync.ts** | `scripts/jira-sync.ts` | Orquestador de integración: consume QARunSummary y coordina todos los servicios del Módulo 2 |
+| **jira-sync.ts** | `scripts/jira-sync.ts` | Dispatcher para el Adaptador Jira. Orquesta las 6 acciones del sistema |
 
 ---
 
@@ -924,9 +866,9 @@ Al finalizar todos los scenarios:
     │       │                                               │
     │       ├─ invoca → report.ts                           │
     │       │                                               │
-    │       └─ invoca → jira-sync.ts ──► MÓDULO 2 (Bridge) │
+    │       └─ invoca → jira-sync.ts ──► MÓDULO 2 (Bridge)  │
     └────────────────────────────────────────────────────────┘
-                    │ (via archivo)
+                    │ (via archivo en disco)
                     ▼
            reports/cucumber-report.json
                     │
@@ -946,8 +888,6 @@ Al finalizar todos los scenarios:
 | **Módulo 3** | Invoca via CLI | Importa tipos y servicios | — |
 | **Archivo compartido** | Escribe JSON | Lee JSON | Orquesta ambos |
 
-Los módulos están **desacoplados por diseño**: el Módulo 1 no sabe que existe Jira, el Módulo 2 no sabe cómo funciona Playwright, y ambos se comunican solo a través del archivo `cucumber-report.json`.
-
 ---
 
 # Archivos de Salida del Sistema
@@ -956,21 +896,20 @@ Los módulos están **desacoplados por diseño**: el Módulo 1 no sabe que exist
 reports/
 ├── cucumber-report.json          ← Contrato entre Módulo 1 y Módulo 2
 ├── html/
-│   └── index.html                ← Reporte HTML generado por report.ts
+│   └── index.html                ← Reporte HTML (report.ts)
 ├── qa-dashboard.html             ← Dashboard HTML local (DashboardGenerator)
 └── .jira/
-    ├── .dashboard-created        ← Marker: URL del dashboard Jira
-    └── case-registry.dat         ← Persistencia scenarioId → issueKey
+    ├── .dashboard-created        ← URL del dashboard Jira
+    └── case-registry.dat         ← scenarioId → issueKey
 
 test-results/
 ├── videos/
-│   └── {feature}/
-│       └── {scenario-slug}_{datetime}_{PASSED|FAILED}.webm
+│   └── {feature}/{scenario}_{datetime}_{PASSED|FAILED}.webm
 └── traces/
     └── {scenario-slug}-{id}.zip
 
 src/test/features/**/*.feature    ← Modificados dinámicamente por FeatureTagger
-                                    para agregar @jira:KEY tras crear un issue
+                                    para agregar @jira:KEY al crear un issue
 ```
 
 ---
@@ -981,20 +920,22 @@ src/test/features/**/*.feature    ← Modificados dinámicamente por FeatureTagg
 |---|---|---|---|
 | `ENV` | 1, 2, 3 | No (default: qa) | Ambiente activo. Define qué `.env.{env}` cargar |
 | `BASE_URL` | 1 | Sí | URL base de la aplicación bajo prueba |
-| `CI` | 1, 3 | No | Si existe: headless=true, retry=1, no abre browser |
+| `CI` | 1, 3 | No | headless=true, retry=1, no abre browser |
 | `PARALLEL` | 3 | No (default: 4) | Workers paralelos de Cucumber |
-| `RECORD_VIDEO` | 1 | No | Si `true`: graba video aunque no sea CI |
-| `JIRA_ENABLED` | 2 | Sí | `true` activa sincronización con Jira |
+| `RECORD_VIDEO` | 1 | No | Graba video aunque no sea CI |
+| `QA_AGENT_MODE` | 2 | No (default: false) | `true`: fallos de framework no crean tarea — el agente corrige el código directamente |
+| `JIRA_ENABLED` | 2 | Sí | `true` activa el adaptador Jira |
 | `JIRA_BASE_URL` | 2 | Sí* | URL base Jira Cloud |
 | `JIRA_EMAIL` | 2 | Sí* | Email de la cuenta de servicio |
 | `JIRA_API_TOKEN` | 2 | Sí* | API Token de Jira |
 | `JIRA_PROJECT_KEY` | 2 | Sí* | Clave del proyecto (ej: KAN) |
 | `JIRA_PARENT_ISSUE_KEY` | 2 | Sí* | Issue padre de todos los casos |
 | `JIRA_EPIC_KEY` | 2 | Sí* | Epic que agrupa los casos |
-| `JIRA_ASSIGNEE_ACCOUNT_ID` | 2 | No | accountId del asignado |
+| `JIRA_ASSIGNEE_ACCOUNT_ID` | 2 | No | accountId del asignado por defecto |
 | `JIRA_SPRINT_URL` | 2 | No | URL o ID del sprint |
 | `JIRA_TEAM_ID` | 2 | No | UUID del equipo |
 | `JIRA_DUE_DATE_DAYS` | 2 | No | Días para fecha de vencimiento |
-| `JIRA_EXECUTOR_NAME` | 2 | No | Nombre en el resumen de regresión |
+| `JIRA_EXECUTOR_NAME` | 2 | No | Nombre en el resumen de regresión (Acción 3) |
+| `JIRA_BUG_ISSUE_TYPE` | 2 | No (default: Task) | Tipo de issue para bugs (Acción 6). Cambiar a `Bug` si el proyecto lo tiene |
 
 *Solo requeridas si `JIRA_ENABLED=true`

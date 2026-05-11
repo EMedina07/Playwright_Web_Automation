@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { buildIssueTag } from './config/tag.config';
 
 const FEATURE_GLOB_ROOT = path.resolve(process.cwd(), 'src', 'features');
 
@@ -35,7 +36,7 @@ export function tagScenarioInFeature(
   scenarioName: string,
   issueKey: string,
 ): boolean {
-  const tag = `@jira:${issueKey}`;
+  const tag = buildIssueTag(issueKey);
 
   // featureUri may be relative (from cucumber report) — resolve from cwd
   const filePath = path.isAbsolute(featureUri)

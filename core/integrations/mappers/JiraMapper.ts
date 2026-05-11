@@ -1,6 +1,7 @@
 import { QACucumberResult, JiraSyncResult } from '../types/qa-bridge.types';
 import { JiraConfig } from '../config/jira.config';
 import { parseAllCards, ParsedStepCard, ParsedTimingCard } from '../utils/card-parser';
+import { FailureAnalysis } from '../utils/failure-analyzer';
 
 // ─── ADF helpers ─────────────────────────────────────────────────────────────
 
@@ -496,10 +497,209 @@ export function buildTransitionPayload(transitionId: string): object {
 }
 
 export function extractJiraTag(tags: string[]): string | undefined {
-  const tag = tags.find((t) => t.startsWith('@jira:'));
-  return tag ? tag.replace('@jira:', '') : undefined;
+  const { extractIssueKey } = require('../config/tag.config');
+  return extractIssueKey(tags);
 }
 
 export function isRegressionRun(tags: string[]): boolean {
   return tags.some((t) => t === '@Regresion');
+}
+
+// ─── Failure analysis ADF builders ───────────────────────────────────────────
+
+function buildFailureAnalysisSection(analysis: FailureAnalysis): object[] {
+  const content: object[] = [
+    adfHeading('🔍 Análisis del Fallo', 2),
+    adfPanel(
+      'error',
+      adfParagraph(adfText('Clasificación: ', true), adfText(analysis.classification === 'framework' ? '🔧 Problema de Automatización' : '🐛 Defecto de Aplicación')),
+      adfParagraph(adfText('Tipo: ', true), adfText(analysis.errorTitle)),
+      ...(analysis.failedStep ? [
+        adfParagraph(
+          adfText('Paso fallido: ', true),
+          adfText(`${analysis.failedStep.keyword.trim()} ${analysis.failedStep.text}`),
+        ),
+      ] : []),
+      ...(analysis.lastSuccessfulStep ? [
+        adfParagraph(
+          adfText('Último paso exitoso: ', true),
+          adfText(`${analysis.lastSuccessfulStep.keyword.trim()} ${analysis.lastSuccessfulStep.text}`),
+        ),
+      ] : []),
+    ),
+  ];
+
+  if (analysis.errorDetail) {
+    content.push(
+      adfHeading('Mensaje de Error', 3),
+      adfCodeBlock(analysis.errorDetail.slice(0, 2000)),
+    );
+  }
+
+  content.push(
+    adfHeading('Corrección Sugerida', 3),
+    adfPanel('note', adfParagraph(adfText(analysis.suggestedFix))),
+  );
+
+  return content;
+}
+
+function buildReproductionStepsSection(analysis: FailureAnalysis): object[] {
+  const content: object[] = [
+    adfHeading('Pasos para Reproducir', 2),
+  ];
+  analysis.reproductionSteps.forEach((step) => {
+    content.push(adfParagraph(adfText(step)));
+  });
+  return content;
+}
+
+// ─── Refactoring task payload ─────────────────────────────────────────────────
+
+export function buildRefactoringTaskDescription(
+  testCaseKey: string,
+  scenario: QACucumberResult,
+  analysis: FailureAnalysis,
+  cfg: Pick<JiraConfig, 'baseUrl'>,
+): object {
+  const content: object[] = [
+    adfHeading('🔧 Tarea de Refactorización — Fallo de Automatización', 1),
+    adfDivider(),
+    adfPanel(
+      'warning',
+      adfParagraph(adfText('Caso de prueba: ', true), adfLink(testCaseKey, `${cfg.baseUrl}/browse/${testCaseKey}`)),
+      adfParagraph(adfText('Feature: ', true), adfText(scenario.featureName)),
+      adfParagraph(adfText('Escenario: ', true), adfText(scenario.scenarioName)),
+    ),
+    adfDivider(),
+    ...buildFailureAnalysisSection(analysis),
+    adfDivider(),
+    ...buildReproductionStepsSection(analysis),
+    adfDivider(),
+    adfParagraph(adfText('Generado automáticamente — '), adfText(new Date().toISOString(), false, true)),
+  ];
+  return adfDoc(...content);
+}
+
+export function buildRefactoringTaskPayload(
+  testCaseKey: string,
+  scenario: QACucumberResult,
+  analysis: FailureAnalysis,
+  cfg: Pick<JiraConfig, 'projectKey' | 'epicKey' | 'baseUrl' | 'assigneeAccountId' | 'sprintUrl' | 'teamId'>,
+  qaAccountId?: string,
+): object {
+  const errorShort = analysis.errorTitle.slice(0, 60);
+  // QA del caso de prueba tiene prioridad sobre el asignado genérico del env
+  const assigneeId = qaAccountId ?? cfg.assigneeAccountId;
+  return {
+    fields: {
+      project: { key: cfg.projectKey },
+      summary: `[QA-REFACTOR] ${scenario.featureName} — ${errorShort}`,
+      description: buildRefactoringTaskDescription(testCaseKey, scenario, analysis, cfg),
+      issuetype: { name: 'Task' },
+      labels: ['qa-automation', 'qa-refactoring', analysis.errorCategory],
+      ...(cfg.epicKey ? { parent: { key: cfg.epicKey } } : {}),
+      ...(assigneeId ? { assignee: { accountId: assigneeId } } : {}),
+      ...(cfg.sprintUrl ? { customfield_10062: cfg.sprintUrl } : {}),
+      ...(cfg.teamId ? { customfield_10001: cfg.teamId } : {}),
+    },
+  };
+}
+
+// ─── Bug payload ──────────────────────────────────────────────────────────────
+
+export function buildBugDescription(
+  testCaseKey: string,
+  scenario: QACucumberResult,
+  analysis: FailureAnalysis,
+  cfg: Pick<JiraConfig, 'baseUrl'>,
+): object {
+  const content: object[] = [
+    adfHeading('🐛 Bug — Defecto de Aplicación', 1),
+    adfDivider(),
+    adfPanel(
+      'error',
+      adfParagraph(adfText('Caso de prueba: ', true), adfLink(testCaseKey, `${cfg.baseUrl}/browse/${testCaseKey}`)),
+      adfParagraph(adfText('Feature: ', true), adfText(scenario.featureName)),
+      adfParagraph(adfText('Escenario: ', true), adfText(scenario.scenarioName)),
+    ),
+    adfDivider(),
+    adfHeading('Qué se quería probar', 2),
+    adfPanel(
+      'info',
+      adfParagraph(adfText(scenario.scenarioName)),
+      adfParagraph(adfText('Feature: ', true), adfText(scenario.featureName)),
+    ),
+    adfDivider(),
+    adfHeading('Hasta dónde se pudo llegar', 2),
+    ...(analysis.lastSuccessfulStep ? [
+      adfPanel(
+        'note',
+        adfParagraph(adfText('Último paso exitoso: ', true), adfText(`${analysis.lastSuccessfulStep.keyword.trim()} ${analysis.lastSuccessfulStep.text}`)),
+        adfParagraph(adfText('Fallo en: ', true), adfText(analysis.failedStep ? `${analysis.failedStep.keyword.trim()} ${analysis.failedStep.text}` : '—')),
+      ),
+    ] : [adfPanel('note', adfParagraph(adfText('El fallo ocurrió en el primer paso del escenario.')))]),
+    adfDivider(),
+    ...buildReproductionStepsSection(analysis),
+    adfDivider(),
+    ...buildFailureAnalysisSection(analysis),
+    adfDivider(),
+    adfParagraph(adfText('Generado automáticamente — '), adfText(new Date().toISOString(), false, true)),
+  ];
+  return adfDoc(...content);
+}
+
+export function buildBugPayload(
+  testCaseKey: string,
+  scenario: QACucumberResult,
+  analysis: FailureAnalysis,
+  devAccountId: string | undefined,
+  cfg: Pick<JiraConfig, 'projectKey' | 'epicKey' | 'baseUrl' | 'assigneeAccountId' | 'sprintUrl' | 'teamId' | 'bugIssueType'>,
+): object {
+  const errorShort = analysis.errorTitle.slice(0, 60);
+  const assigneeId = devAccountId ?? cfg.assigneeAccountId;
+  const issueTypeName = cfg.bugIssueType ?? 'Task';
+  return {
+    fields: {
+      project: { key: cfg.projectKey },
+      summary: `[BUG] ${scenario.featureName} — ${errorShort}`,
+      description: buildBugDescription(testCaseKey, scenario, analysis, cfg),
+      issuetype: { name: issueTypeName },
+      labels: ['qa-automation', 'qa-failure-bug', analysis.errorCategory],
+      ...(cfg.epicKey ? { parent: { key: cfg.epicKey } } : {}),
+      ...(assigneeId ? { assignee: { accountId: assigneeId } } : {}),
+      ...(cfg.sprintUrl ? { customfield_10062: cfg.sprintUrl } : {}),
+      ...(cfg.teamId ? { customfield_10001: cfg.teamId } : {}),
+    },
+  };
+}
+
+// ─── Recurrence comment body ──────────────────────────────────────────────────
+
+export function buildRecurrenceCommentBody(
+  scenario: QACucumberResult,
+  analysis: FailureAnalysis,
+  runDate: string,
+): object {
+  const content: object[] = [
+    adfHeading(`🔄 Recurrencia detectada — ${runDate}`, 2),
+    adfPanel(
+      'error',
+      adfParagraph(adfText('Este fallo fue detectado nuevamente en la ejecución del ', true), adfText(runDate, false, true)),
+      adfParagraph(adfText('Escenario: ', true), adfText(scenario.scenarioName)),
+      adfParagraph(adfText('Feature: ', true), adfText(scenario.featureName)),
+    ),
+    adfDivider(),
+    adfParagraph(adfText('Tipo de error: ', true), adfText(analysis.errorTitle)),
+    ...(analysis.failedStep ? [
+      adfParagraph(
+        adfText('Paso que falló: ', true),
+        adfText(`${analysis.failedStep.keyword.trim()} ${analysis.failedStep.text}`),
+      ),
+    ] : []),
+    adfCodeBlock(analysis.errorDetail.slice(0, 1500)),
+    adfDivider(),
+    adfParagraph(adfText('Registrado automáticamente — '), adfText(new Date().toISOString(), false, true)),
+  ];
+  return adfDoc(...content);
 }
