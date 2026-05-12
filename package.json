@@ -29,6 +29,7 @@
     "test:cert": "node scripts/run-tests.js cert",
     "report": "ts-node --transpile-only report.ts",
     "jira:sync": "ts-node --transpile-only scripts/jira-sync.ts",
+    "jira:reset": "node -e \"require('fs').writeFileSync('reports/.jira/case-registry.dat', '{}', 'utf8'); console.log('Registry limpiado.')\"",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",

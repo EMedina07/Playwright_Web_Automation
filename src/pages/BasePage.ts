@@ -13,11 +13,16 @@ export abstract class BasePage {
   // ya existe pero el renderizado visual aún no se completó.
   private async waitForVisualStability(): Promise<void> {
     try {
-      // Si hubo una navegación, espera que el DOM del nuevo documento esté listo
       await this.page.waitForLoadState('domcontentloaded', { timeout: 5_000 });
     } catch {}
+    // Si la página está en blanco por una navegación en curso, espera que se establezca la URL real
+    if (this.page.url() === 'about:blank') {
+      try {
+        await this.page.waitForURL((url) => url.href !== 'about:blank', { timeout: 8_000 });
+        await this.page.waitForLoadState('domcontentloaded', { timeout: 5_000 });
+      } catch {}
+    }
     try {
-      // Dos ciclos de animación garantizan que Vue/React terminó de pintar
       await this.page.evaluate(
         'new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))',
       );

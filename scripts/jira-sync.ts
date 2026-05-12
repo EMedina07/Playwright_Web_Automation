@@ -10,8 +10,8 @@ import { parseCucumberReport } from '../core/integrations/mappers/CucumberMapper
 import { extractJiraTag, isRegressionRun } from '../core/integrations/mappers/JiraMapper';
 import { JiraService } from '../core/integrations/services/JiraService';
 import { JiraDashboardService } from '../core/integrations/services/JiraDashboardService';
-import { getIssueKey, setIssueKey, touchSync } from '../core/integrations/utils/case-registry';
-import { tagScenarioInFeature } from '../core/integrations/FeatureTagger';
+import { getIssueKey, setIssueKey, resetRegistry, getLastStatus } from '../core/integrations/utils/case-registry';
+import { tagScenarioInFeature, tagOutlineRowsInFeature } from '../core/integrations/FeatureTagger';
 import { shouldGenerateDashboard } from '../core/integrations/DashboardGenerator';
 import { JiraSyncResult, QACucumberResult } from '../core/integrations/types/qa-bridge.types';
 import { analyzeFailure } from '../core/integrations/utils/failure-analyzer';
@@ -22,19 +22,23 @@ async function handleNewScenario(
   jira: JiraService,
   scenario: QACucumberResult,
   cfg: ReturnType<typeof loadJiraConfig>,
+  registryKey: string,
+  rowLabel?: string,
 ): Promise<JiraSyncResult> {
+  const rowTag = rowLabel ? ` (${rowLabel.replace('qa-row-', '')})` : '';
+
   // Guard: reuse existing Jira issue if same summary already exists
-  const duplicate = await jira.findExistingIssue(scenario);
+  const duplicate = await jira.findExistingIssue(scenario, rowLabel);
   if (duplicate) {
-    console.log(`  [FOUND] Issue existente reutilizado: ${duplicate.key} → "${scenario.scenarioName}"`);
-    setIssueKey(scenario.scenarioId, duplicate.key);
-    tagScenarioInFeature(scenario.featureUri, scenario.scenarioName, duplicate.key);
+    console.log(`  [FOUND] Issue existente reutilizado: ${duplicate.key} → "${scenario.scenarioName}"${rowTag}`);
+    setIssueKey(registryKey, duplicate.key);
+    if (!rowLabel) tagScenarioInFeature(scenario.featureUri, scenario.scenarioName, duplicate.key);
     return { scenarioName: scenario.scenarioName, featureName: scenario.featureName, status: scenario.status, action: 'skipped', issueKey: duplicate.key };
   }
 
-  console.log(`  [NEW] Creando issue para: "${scenario.scenarioName}"`);
+  console.log(`  [NEW] Creando issue para: "${scenario.scenarioName}"${rowTag}`);
   try {
-    const issueRef = await jira.createIssue(scenario);
+    const issueRef = await jira.createIssue(scenario, rowLabel);
     await jira.linkToParent(issueRef.key);
 
     // Upload screenshots → get content URLs → update description with clickable links
@@ -53,8 +57,8 @@ async function handleNewScenario(
       await jira.transitionToFailed(issueRef.key);
     }
 
-    setIssueKey(scenario.scenarioId, issueRef.key);
-    tagScenarioInFeature(scenario.featureUri, scenario.scenarioName, issueRef.key);
+    setIssueKey(registryKey, issueRef.key);
+    if (!rowLabel) tagScenarioInFeature(scenario.featureUri, scenario.scenarioName, issueRef.key);
 
     console.log(`  ✅ Issue creado: ${issueRef.key} → ${issueRef.url}`);
     return { scenarioName: scenario.scenarioName, featureName: scenario.featureName, status: scenario.status, action: 'created', issueKey: issueRef.key };
@@ -69,10 +73,17 @@ async function handleRegressionScenario(
   jira: JiraService,
   scenario: QACucumberResult,
   issueKey: string,
+  registryKey: string,
 ): Promise<JiraSyncResult> {
+  const lastStatus = getLastStatus(registryKey);
+  if (scenario.status === 'passed' && lastStatus === 'passed') {
+    setIssueKey(registryKey, issueKey, 'passed');
+    console.log(`  [SKIPPED] Sin cambio (passed → passed): ${issueKey}`);
+    return { scenarioName: scenario.scenarioName, featureName: scenario.featureName, status: scenario.status, action: 'skipped', issueKey };
+  }
+
   console.log(`  [REGRESSION] Actualizando ${issueKey} para: "${scenario.scenarioName}"`);
   try {
-    // Upload screenshots first so comment and description links work
     let attachmentMap: Map<string, string> | undefined;
     if (scenario.screenshots.length > 0) {
       const attachments = await jira.attachScreenshots(issueKey, scenario);
@@ -81,7 +92,6 @@ async function handleRegressionScenario(
       }
     }
 
-    // Update description with latest evidence + failure analysis (no comment needed)
     await jira.updateDescription(issueKey, scenario, attachmentMap ?? new Map());
     console.log(`    🔗 Descripción actualizada con evidencias de regresión`);
 
@@ -93,45 +103,7 @@ async function handleRegressionScenario(
       await jira.transitionToFailed(issueKey);
     }
 
-    // ── Failure analysis: classify and create Bug or Refactoring task ──────────
-    if (scenario.status === 'failed') {
-      const runDate = new Date().toISOString().slice(0, 10);
-      const isAgentMode = process.env.QA_AGENT_MODE === 'true';
-      const analysis = analyzeFailure(scenario);
-
-      console.log(`    🔎 Clasificación: ${analysis.classification === 'framework' ? '🔧 Framework' : '🐛 Aplicación'} — ${analysis.errorTitle}`);
-
-      try {
-        const existingType = analysis.classification === 'framework' ? 'refactoring' : 'bug';
-        const existing = await jira.findLinkedFailureIssue(issueKey, existingType);
-
-        if (existing) {
-          await jira.addFailureRecurrenceComment(existing.key, scenario, analysis, runDate);
-          console.log(`    🔄 Recurrencia registrada en: ${existing.url}`);
-        } else if (analysis.classification === 'framework' && isAgentMode) {
-          console.log(`    🤖 [AGENT MODE] Fallo de framework detectado — el agente debe corregir el código y re-ejecutar.`);
-        } else if (analysis.classification === 'framework') {
-          const qaAccountId = await jira.getIssueAssignee(issueKey);
-          if (qaAccountId) console.log(`    👤 Asignando refactorización al QA del caso: ${qaAccountId}`);
-          const taskRef = await jira.createRefactoringTask(issueKey, scenario, analysis, qaAccountId ?? undefined, attachmentMap);
-          console.log(`    🔧 Tarea de refactorización creada: ${taskRef.url}`);
-        } else {
-          const parentStory = await jira.findLinkedStory(issueKey);
-          const devAccountId = parentStory?.assigneeAccountId ?? null;
-          if (devAccountId) console.log(`    👤 Asignando bug al developer de la historia padre (${parentStory?.key}): ${devAccountId}`);
-          if (parentStory?.key) console.log(`    🔗 Vinculando bug a la historia padre: ${parentStory.key}`);
-          const bugRef = await jira.createBug(issueKey, scenario, analysis, devAccountId ?? undefined, attachmentMap, parentStory?.key);
-          console.log(`    🐛 Bug creado: ${bugRef.url}`);
-        }
-      } catch (failErr: unknown) {
-        const msg = failErr instanceof Error ? failErr.message : String(failErr);
-        const detail = (failErr as any)?.response?.data;
-        console.warn(`    ⚠️ No se pudo crear el issue de fallo: ${msg}`);
-        if (detail) console.warn(`    🔍 Respuesta Jira: ${JSON.stringify(detail)}`);
-      }
-    }
-
-    touchSync(scenario.scenarioId);
+    setIssueKey(registryKey, issueKey, scenario.status);
     console.log(`  ✅ Issue actualizado: ${issueKey}`);
     return { scenarioName: scenario.scenarioName, featureName: scenario.featureName, status: scenario.status, action: 'updated', issueKey };
   } catch (err: unknown) {
@@ -141,28 +113,122 @@ async function handleRegressionScenario(
   }
 }
 
+function deriveRowLabel(scenario: QACucumberResult, outlineScenarioIds: Set<string>): string | undefined {
+  // Scenario Outline rows share the same scenarioId; detect them by duplicate count
+  if (!outlineScenarioIds.has(scenario.scenarioId)) return undefined;
+
+  for (const step of scenario.steps) {
+    const match = step.text?.match(/"([^"]+)"/);
+    if (match) {
+      const dataId = match[1].replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase();
+      return `qa-row-${dataId}`;
+    }
+  }
+  return undefined;
+}
+
+async function handleFailureAnalysis(
+  jira: JiraService,
+  scenario: QACucumberResult,
+  issueKey: string,
+  attachmentMap: Map<string, string>,
+  rowLabel?: string,
+): Promise<void> {
+  const runDate = new Date().toISOString().slice(0, 10);
+  const isAgentMode = process.env.QA_AGENT_MODE === 'true';
+  const analysis = analyzeFailure(scenario);
+  const rowTag = rowLabel ? ` [${rowLabel}]` : '';
+
+  console.log(`    🔎 Clasificación: ${analysis.classification === 'framework' ? '🔧 Framework' : '🐛 Aplicación'} — ${analysis.errorTitle}${rowTag}`);
+
+  try {
+    const existingType = analysis.classification === 'framework' ? 'refactoring' : 'bug';
+    const existing = await jira.findLinkedFailureIssue(issueKey, existingType, rowLabel);
+
+    if (existing) {
+      await jira.addFailureRecurrenceComment(existing.key, scenario, analysis, runDate);
+      console.log(`    🔄 Recurrencia registrada en: ${existing.url}${rowTag}`);
+    } else if (analysis.classification === 'framework' && isAgentMode) {
+      console.log(`    🤖 [AGENT MODE] Fallo de framework detectado — el agente debe corregir el código y re-ejecutar.`);
+    } else if (analysis.classification === 'framework') {
+      const qaAccountId = await jira.getIssueAssignee(issueKey);
+      if (qaAccountId) console.log(`    👤 Asignando refactorización al QA del caso: ${qaAccountId}`);
+      const taskRef = await jira.createRefactoringTask(issueKey, scenario, analysis, qaAccountId ?? undefined, attachmentMap);
+      console.log(`    🔧 Tarea de refactorización creada: ${taskRef.url}`);
+    } else {
+      const parentStory = await jira.findLinkedStory(issueKey);
+      const devAccountId = parentStory?.assigneeAccountId ?? null;
+      if (devAccountId) console.log(`    👤 Asignando bug al developer de la historia padre (${parentStory?.key}): ${devAccountId}`);
+      if (parentStory?.key) console.log(`    🔗 Vinculando bug a la historia padre: ${parentStory.key}`);
+      const bugRef = await jira.createBug(issueKey, scenario, analysis, devAccountId ?? undefined, attachmentMap, parentStory?.key, rowLabel);
+      console.log(`    🐛 Bug creado: ${bugRef.url}${rowTag}`);
+    }
+  } catch (failErr: unknown) {
+    const msg = failErr instanceof Error ? failErr.message : String(failErr);
+    const detail = (failErr as any)?.response?.data;
+    console.warn(`    ⚠️ No se pudo crear el issue de fallo: ${msg}`);
+    if (detail) console.warn(`    🔍 Respuesta Jira: ${JSON.stringify(detail)}`);
+  }
+}
+
 async function syncScenario(
   jira: JiraService,
   scenario: QACucumberResult,
   cfg: ReturnType<typeof loadJiraConfig>,
+  outlineScenarioIds: Set<string>,
 ): Promise<JiraSyncResult> {
-  const jiraTagKey = extractJiraTag(scenario.tags);
-  const registryKey = getIssueKey(scenario.scenarioId);
-  const existingKey = jiraTagKey ?? registryKey;
+  const rowLabel = deriveRowLabel(scenario, outlineScenarioIds);
+
+  if (rowLabel) {
+    // ── Scenario Outline row: cada fila tiene su propio test case independiente ──
+    // Nota: las filas de outline tienen tags vacíos en el JSON de Cucumber,
+    // por lo que NO se puede usar isRegressionRun. El registry es la fuente de verdad.
+    const rowRegistryKey = `${scenario.scenarioId}:${rowLabel}`;
+    let existingKey = getIssueKey(rowRegistryKey);
+
+    // Fallback: si el registry fue limpiado (JIRA_RESET_REGISTRY=true), verificar en Jira
+    if (!existingKey) {
+      const found = await jira.findExistingIssue(scenario, rowLabel);
+      if (found) {
+        existingKey = found.key;
+        setIssueKey(rowRegistryKey, found.key);
+        const rowTag = ` (${rowLabel.replace('qa-row-', '')})`;
+        console.log(`  [FOUND] Issue outline recuperado de Jira: ${found.key} → "${scenario.scenarioName}"${rowTag}`);
+      }
+    }
+
+    if (existingKey) {
+      // Ya existe (en registry o recuperado de Jira) → actualizar como regresión
+      const result = await handleRegressionScenario(jira, scenario, existingKey, rowRegistryKey);
+      if (scenario.status === 'failed' && result.action !== 'error') {
+        await handleFailureAnalysis(jira, scenario, existingKey, new Map(), rowLabel);
+      }
+      return result;
+    }
+
+    // Primera ejecución para esta fila → crear su propio test case
+    return handleNewScenario(jira, scenario, cfg, rowRegistryKey, rowLabel);
+  }
+
+  // ── Escenario regular (no es fila de outline) ─────────────────────────────
   const isRegression = isRegressionRun(scenario.tags);
+  const jiraTagKey = extractJiraTag(scenario.tags);
+  const existingKey = jiraTagKey ?? getIssueKey(scenario.scenarioId);
 
   if (existingKey && isRegression) {
-    return handleRegressionScenario(jira, scenario, existingKey);
+    const result = await handleRegressionScenario(jira, scenario, existingKey, scenario.scenarioId);
+    if (scenario.status === 'failed' && result.action !== 'error') {
+      await handleFailureAnalysis(jira, scenario, existingKey, new Map());
+    }
+    return result;
   }
 
   if (existingKey && !isRegression) {
-    // Retest — no Jira interaction required
-    console.log(`  [RETEST] Omitido (solo retest): "${scenario.scenarioName}" → ${existingKey}`);
+    console.log(`  [RETEST] Omitido: "${scenario.scenarioName}" → ${existingKey}`);
     return { scenarioName: scenario.scenarioName, featureName: scenario.featureName, status: scenario.status, action: 'skipped', issueKey: existingKey };
   }
 
-  // No existing Jira key → create new issue
-  return handleNewScenario(jira, scenario, cfg);
+  return handleNewScenario(jira, scenario, cfg, scenario.scenarioId);
 }
 
 async function main(): Promise<void> {
@@ -171,6 +237,11 @@ async function main(): Promise<void> {
   if (!cfg.enabled) {
     console.log('[jira-sync] JIRA_ENABLED no está activo — sincronización omitida.');
     return;
+  }
+
+  if (process.env.JIRA_RESET_REGISTRY === 'true') {
+    resetRegistry();
+    console.log('[jira-sync] Registry limpiado (JIRA_RESET_REGISTRY=true).\n');
   }
 
   console.log('\n═══════════════════════════════════════');
@@ -200,12 +271,44 @@ async function main(): Promise<void> {
 
   console.log(`📋 Escenarios encontrados: ${summary.total} (✅ ${summary.passed} | ❌ ${summary.failed} | ⏭ ${summary.skipped})\n`);
 
+  // Detectar filas de Scenario Outline: scenarioIds que aparecen más de una vez
+  const scenarioIdCounts = new Map<string, number>();
+  for (const s of summary.scenarios) {
+    scenarioIdCounts.set(s.scenarioId, (scenarioIdCounts.get(s.scenarioId) ?? 0) + 1);
+  }
+  const outlineScenarioIds = new Set<string>(
+    [...scenarioIdCounts.entries()].filter(([, n]) => n > 1).map(([id]) => id),
+  );
+  if (outlineScenarioIds.size > 0) {
+    console.log(`🔍 Scenario Outlines detectados: ${outlineScenarioIds.size} grupo(s)\n`);
+  }
+
   const results: JiraSyncResult[] = [];
 
   for (const scenario of summary.scenarios) {
     console.log(`→ ${scenario.featureName} / "${scenario.scenarioName}" [${scenario.status.toUpperCase()}]`);
-    const result = await syncScenario(jira, scenario, cfg);
+    const result = await syncScenario(jira, scenario, cfg, outlineScenarioIds);
     results.push(result);
+  }
+
+  // Tag outline rows in feature files with per-row Examples sections
+  if (outlineScenarioIds.size > 0) {
+    const outlineGroupMap = new Map<string, { featureUri: string; scenarioName: string; rows: Array<{ dataValue: string; issueKey: string }> }>();
+    for (let i = 0; i < summary.scenarios.length; i++) {
+      const scenario = summary.scenarios[i];
+      const result = results[i];
+      const rowLabel = deriveRowLabel(scenario, outlineScenarioIds);
+      if (!rowLabel || !result.issueKey) continue;
+      const groupKey = `${scenario.featureUri}::${scenario.scenarioName}`;
+      if (!outlineGroupMap.has(groupKey)) {
+        outlineGroupMap.set(groupKey, { featureUri: scenario.featureUri, scenarioName: scenario.scenarioName, rows: [] });
+      }
+      const dataValue = rowLabel.replace('qa-row-', '');
+      outlineGroupMap.get(groupKey)!.rows.push({ dataValue, issueKey: result.issueKey });
+    }
+    for (const { featureUri, scenarioName, rows } of outlineGroupMap.values()) {
+      tagOutlineRowsInFeature(featureUri, scenarioName, rows);
+    }
   }
 
   // Jira Dashboard — create once

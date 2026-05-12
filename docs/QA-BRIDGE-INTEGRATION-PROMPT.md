@@ -2,7 +2,7 @@
 
 > **Este documento es LEY.** Toda integración nueva, sin importar la herramienta de gestión de proyectos (Jira, TestRail, Azure DevOps, Linear, Notion, etc.), debe respetar la arquitectura, los contratos de datos, los patrones y los estándares definidos aquí. Nada de esto es opcional.
 >
-> **Última actualización:** 2026-05-11 — Incluye las 6 acciones del sistema, patrón multi-adaptador y análisis de fallos.
+> **Última actualización:** 2026-05-12 — Incluye las 6 acciones del sistema, patrón multi-adaptador, análisis de fallos y soporte de Scenario Outline con test case por fila.
 
 ---
 
@@ -337,27 +337,68 @@ process.exit(testExitCode)  ← siempre el exit code de las pruebas, no del sync
 
 ### 1. Detección de modo de sincronización
 
-Todo adaptador debe detectar el contexto de la ejecución desde los tags del scenario:
+**Escenarios regulares** — todo adaptador detecta el contexto desde los tags del scenario:
 
 ```typescript
 extractIssueTag(tags: string[]): string | undefined    // @{tool}:KEY-123
 isRegressionRun(tags: string[]): boolean               // @Regresion
 ```
 
-Lógica de decisión:
+Lógica de decisión para escenarios regulares:
 - `key existe && isRegression` → Acción 2 (actualizar)
 - `key existe && !isRegression` → omitir
 - `key no existe` → Acción 1 (crear)
 
-### 2. Registry persistente (case-registry)
+**Scenario Outline rows** — detección especial obligatoria:
 
-`core/integrations/utils/case-registry.ts` mapea `scenarioId → issueKey` en disco. Obligatorio en toda integración:
+En esta versión de `@cucumber/cucumber`, los tags del `Scenario Outline:` NO se propagan a los elementos individuales de cada fila en el JSON. Por eso los outline rows tienen `tags: []` siempre.
+
+Solución: detectar outline rows contando `scenarioId` duplicados en el reporte. Todos los rows de un mismo outline comparten el mismo `scenarioId`.
 
 ```typescript
-getIssueKey(scenarioId)       // fuente secundaria (backup del tag)
-setIssueKey(scenarioId, key)  // tras crear un caso (Acción 1)
-touchSync(scenarioId)         // tras actualizar en regresión (Acción 2)
+// En el dispatcher, antes del loop principal:
+const scenarioIdCounts = new Map<string, number>();
+for (const s of summary.scenarios) {
+  scenarioIdCounts.set(s.scenarioId, (scenarioIdCounts.get(s.scenarioId) ?? 0) + 1);
+}
+const outlineScenarioIds = new Set<string>(
+  [...scenarioIdCounts.entries()].filter(([, n]) => n > 1).map(([id]) => id),
+);
+
+// Para cada scenario, decidir path:
+function deriveRowLabel(scenario, outlineScenarioIds): string | undefined {
+  if (!outlineScenarioIds.has(scenario.scenarioId)) return undefined;
+  for (const step of scenario.steps) {
+    const match = step.text?.match(/"([^"]+)"/);
+    if (match) return `qa-row-${match[1].replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase()}`;
+  }
+  return undefined;
+}
 ```
+
+Lógica de decisión para outline rows (BYPASS de isRegressionRun):
+- `rowRegistryKey = scenarioId:rowLabel`
+- `getIssueKey(rowRegistryKey) existe` → Acción 2 (actualizar como regresión)
+- `getIssueKey(rowRegistryKey) no existe` → Acción 1 (crear con sufijo de fila)
+
+### 2. Registry persistente (case-registry)
+
+`core/integrations/utils/case-registry.ts` mapea `registryKey → issueKey` en disco. Obligatorio en toda integración:
+
+```typescript
+getIssueKey(registryKey)              // fuente secundaria (backup del tag)
+getLastStatus(registryKey)            // último estado conocido (optimización passed→passed)
+setIssueKey(registryKey, key, status?) // tras crear o actualizar un caso
+touchSync(registryKey, status?)       // tras actualizar en regresión (Acción 2)
+resetRegistry()                       // limpia todo (JIRA_RESET_REGISTRY=true)
+```
+
+**Formato de `registryKey`:**
+- Escenario regular: `scenarioId` (string generado por Cucumber)
+- Fila de Scenario Outline: `scenarioId:rowLabel` (compound key)
+  - Ejemplo: `login--orangehrm;login-con-credenciales...;qa-row-neg-wrong-user`
+
+**Por qué compound key:** Sin él, los 3 rows de un outline compartirían el mismo registry slot y se sobreescribirían entre sí.
 
 **Por qué:** El tag en el `.feature` es la fuente primaria. El registry previene duplicados si el tag se pierde o aún no se escribió.
 
@@ -394,13 +435,29 @@ La búsqueda se hace por:
 
 ### 5. Tagging automático del .feature
 
-Después de la Acción 1, siempre escribir el tag en el archivo:
+**Escenario regular** — después de la Acción 1:
 
 ```typescript
 tagScenarioInFeature(featureUri, scenarioName, issueKey)
-// Inserta antes del Scenario:
+// Inserta/actualiza la línea de tags antes del Scenario:
 // @jira:KEY-123        (o @testrail:C456, etc.)
 // Scenario: Nombre
+```
+
+**Scenario Outline** — después del loop principal, una vez por grupo:
+
+```typescript
+tagOutlineRowsInFeature(featureUri, scenarioName, rowTags)
+// rowTags = [{ dataValue: 'neg-wrong-user', issueKey: 'KAN-86' }, ...]
+//
+// Resultado en el .feature:
+// @jira:KAN-85 @jira:KAN-86 @jira:KAN-87 @Regresion
+// Scenario Outline: Login con credenciales inválidas...
+//   Examples:
+//     | dataId             |
+//     | neg-wrong-password |
+//     | neg-wrong-user     |
+//     | neg-wrong-both     |
 ```
 
 Usar `core/integrations/FeatureTagger.ts` — no implementar file manipulation propio.
@@ -601,10 +658,12 @@ class {Tool}Service {
   async updateRegressionSummary(key, results, scenarios, runDate, executorName): Promise<void>
 
   // ─── ACCIONES 5 y 6: Fallos ─────────────────────────────────────────────
-  async findLinkedFailureIssue(caseKey: string, type: 'bug' | 'refactoring'): Promise<IssueRef | null>
-  async findParentStoryAssignee(caseKey: string): Promise<string | null>
-  async createRefactoringTask(caseKey, scenario, analysis, attachMap?): Promise<IssueRef>
-  async createBug(caseKey, scenario, analysis, devAccountId?, attachMap?): Promise<IssueRef>
+  async findLinkedFailureIssue(caseKey: string, type: 'bug' | 'refactoring', rowLabel?: string): Promise<IssueRef | null>
+  // rowLabel? filtra por label 'qa-row-XXX' para no reusar el bug de otra fila
+  async getIssueAssignee(caseKey: string): Promise<string | null>
+  async findLinkedStory(caseKey: string): Promise<{ key: string; assigneeAccountId?: string } | null>
+  async createRefactoringTask(caseKey, scenario, analysis, qaAccountId?, attachMap?): Promise<IssueRef>
+  async createBug(caseKey, scenario, analysis, devAccountId?, attachMap?, parentStoryKey?, rowLabel?): Promise<IssueRef>
   async addFailureRecurrenceComment(issueKey, scenario, analysis, runDate): Promise<void>
 
   // ─── Infraestructura ─────────────────────────────────────────────────────
@@ -801,3 +860,5 @@ Seguir todos los patrones obligatorios de QA-BRIDGE-INTEGRATION-PROMPT.md.
 | HTML como adjunto | Jira renderiza HTML como código fuente, no como página | Solo adjuntar PNG como evidencias |
 | Tipo de issue `Bug` | No todos los proyectos Jira tienen el tipo `Bug` disponible | Configurar `JIRA_BUG_ISSUE_TYPE=Task` y usar labels `qa-failure-bug` |
 | Transición a `Failed` | Estado `Failed` no existe en todos los proyectos | El sistema busca por lista de nombres en español e inglés |
+| Tags en Scenario Outline rows | `@cucumber/cucumber` (v11+) no propaga las tags del `Scenario Outline:` a los elementos individuales de cada fila en el JSON — cada row tiene `tags: []` | Detectar outline rows por `scenarioId` duplicado en el reporte. Usar compound registry key `scenarioId:rowLabel`. El `@Regresion` de las filas se detecta via registry, no via tags. |
+| Resumen de regresión con outlines | `buildRegressionSummaryDescription` usa `scenarios.find(s => s.scenarioName === r.scenarioName)` — para filas de outline con el mismo `scenarioName`, la tabla puede mostrar el estado de la primera fila para todas | Limitación menor que solo afecta la tabla visual del issue de resumen. Los issues individuales de cada fila son correctos. |

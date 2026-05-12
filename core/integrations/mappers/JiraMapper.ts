@@ -132,7 +132,7 @@ function buildFailureAnalysis(scenario: QACucumberResult): object {
     adfHeading('🔍 Análisis del Fallo', 2),
   ];
 
-  failedSteps.forEach((step, idx) => {
+  failedSteps.forEach((step) => {
     const err = step.errorMessage ?? '';
 
     // Classify error type
@@ -227,7 +227,6 @@ export function buildNewIssueDescription(
 export function buildCommentBody(
   scenario: QACucumberResult,
   runDate: string,
-  attachmentMap?: Map<string, string>,
 ): object {
   const { timing } = parseAllCards(scenario.htmlCards);
   const statusEmoji = scenario.status === 'passed' ? '✅' : '❌';
@@ -417,17 +416,19 @@ export function buildRegressionSummaryDescription(
 export function buildNewIssuePayload(
   scenario: QACucumberResult,
   cfg: Pick<JiraConfig, 'projectKey' | 'epicKey' | 'assigneeAccountId' | 'sprintUrl' | 'teamId' | 'dueDateDays'>,
+  rowLabel?: string,
 ): object {
   const today = new Date();
   const startDate = today.toISOString().slice(0, 10);
   const dueDate = cfg.dueDateDays != null
     ? new Date(today.getTime() + cfg.dueDateDays * 86_400_000).toISOString().slice(0, 10)
     : undefined;
+  const rowSuffix = rowLabel ? ` (${rowLabel.replace('qa-row-', '')})` : '';
 
   return {
     fields: {
       project: { key: cfg.projectKey },
-      summary: `[QA] ${scenario.featureName} — ${scenario.scenarioName}`,
+      summary: `[QA] ${scenario.featureName} — ${scenario.scenarioName}${rowSuffix}`,
       description: buildNewIssueDescription(scenario),
       issuetype: { name: 'Task' },
       labels: ['qa-automation', scenario.status],
@@ -655,17 +656,21 @@ export function buildBugPayload(
   analysis: FailureAnalysis,
   devAccountId: string | undefined,
   cfg: Pick<JiraConfig, 'projectKey' | 'epicKey' | 'baseUrl' | 'assigneeAccountId' | 'sprintUrl' | 'teamId' | 'bugIssueType'>,
+  rowLabel?: string,
 ): object {
   const errorShort = analysis.errorTitle.slice(0, 60);
   const assigneeId = devAccountId ?? cfg.assigneeAccountId;
   const issueTypeName = cfg.bugIssueType ?? 'Task';
+  const rowSuffix = rowLabel ? ` (${rowLabel.replace('qa-row-', '')})` : '';
+  const labels = ['qa-automation', 'qa-failure-bug', analysis.errorCategory];
+  if (rowLabel) labels.push(rowLabel);
   return {
     fields: {
       project: { key: cfg.projectKey },
-      summary: `[BUG] ${scenario.featureName} — ${errorShort}`,
+      summary: `[BUG] ${scenario.featureName} — ${errorShort}${rowSuffix}`,
       description: buildBugDescription(testCaseKey, scenario, analysis, cfg),
       issuetype: { name: issueTypeName },
-      labels: ['qa-automation', 'qa-failure-bug', analysis.errorCategory],
+      labels,
       ...(cfg.epicKey ? { parent: { key: cfg.epicKey } } : {}),
       ...(assigneeId ? { assignee: { accountId: assigneeId } } : {}),
       ...(cfg.sprintUrl ? { customfield_10062: cfg.sprintUrl } : {}),

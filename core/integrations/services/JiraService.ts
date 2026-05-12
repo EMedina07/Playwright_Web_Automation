@@ -48,8 +48,9 @@ export class JiraService {
     this.client = createJiraClient(config.baseUrl, config.email, config.apiToken);
   }
 
-  async findExistingIssue(scenario: QACucumberResult): Promise<JiraIssueRef | null> {
-    const summary = `[QA] ${scenario.featureName} — ${scenario.scenarioName}`;
+  async findExistingIssue(scenario: QACucumberResult, rowLabel?: string): Promise<JiraIssueRef | null> {
+    const rowSuffix = rowLabel ? ` (${rowLabel.replace('qa-row-', '')})` : '';
+    const summary = `[QA] ${scenario.featureName} — ${scenario.scenarioName}${rowSuffix}`;
     const jql = `project = "${this.cfg.projectKey}" AND summary = "${summary.replace(/"/g, '\\"')}"`;
     try {
       const res = await postJson<{ issues: JiraIssueResponse[] }>(
@@ -63,8 +64,8 @@ export class JiraService {
     }
   }
 
-  async createIssue(scenario: QACucumberResult): Promise<JiraIssueRef> {
-    const payload = buildNewIssuePayload(scenario, this.cfg);
+  async createIssue(scenario: QACucumberResult, rowLabel?: string): Promise<JiraIssueRef> {
+    const payload = buildNewIssuePayload(scenario, this.cfg, rowLabel);
     const res = await postJson<JiraIssueResponse>(this.client, '/issue', payload);
     return {
       key: res.data.key,
@@ -117,10 +118,9 @@ export class JiraService {
   async addComment(
     issueKey: string,
     scenario: QACucumberResult,
-    attachmentMap?: Map<string, string>,
   ): Promise<void> {
     const runDate = new Date().toISOString().slice(0, 10);
-    const body = buildCommentBody(scenario, runDate, attachmentMap);
+    const body = buildCommentBody(scenario, runDate);
     await postJson(this.client, `/issue/${issueKey}/comment`, { body });
   }
 
@@ -235,13 +235,15 @@ export class JiraService {
   async findLinkedFailureIssue(
     testCaseKey: string,
     type: 'bug' | 'refactoring',
+    rowLabel?: string,
   ): Promise<JiraIssueRef | null> {
     const linkedKeys = await this.getIssueLinks(testCaseKey);
     if (linkedKeys.length === 0) return null;
 
     const label = type === 'bug' ? 'qa-failure-bug' : 'qa-refactoring';
     const keyList = linkedKeys.map((k) => `"${k}"`).join(', ');
-    const jql = `key in (${keyList}) AND labels = "${label}" AND status not in (Done, Resuelto, Finalizada, Closed)`;
+    let jql = `key in (${keyList}) AND labels = "${label}" AND status not in (Done, Resuelto, Finalizada, Closed)`;
+    if (rowLabel) jql += ` AND labels = "${rowLabel}"`;
     try {
       const res = await postJson<{ issues: JiraIssueResponse[] }>(
         this.client, '/search/jql', { jql, fields: ['summary'], maxResults: 1 },
@@ -267,20 +269,31 @@ export class JiraService {
 
   async findLinkedStory(testCaseKey: string): Promise<{ key: string; assigneeAccountId?: string } | null> {
     const linkedKeys = await this.getIssueLinks(testCaseKey);
+    let firstLinked: { key: string; assigneeAccountId?: string } | null = null;
+
     for (const key of linkedKeys) {
       try {
         const res = await getJson<{ fields: { issuetype: { name: string }; assignee?: { accountId: string } } }>(
           this.client, `/issue/${key}?fields=issuetype,assignee`,
         );
         const issueType = res.data.fields.issuetype?.name?.toLowerCase() ?? '';
+        const assigneeAccountId = res.data.fields.assignee?.accountId;
+
+        // Prioridad 1: story/epic con o sin assignee
         if (['story', 'epic', 'historia'].includes(issueType)) {
-          return { key, assigneeAccountId: res.data.fields.assignee?.accountId };
+          return { key, assigneeAccountId };
+        }
+
+        // Prioridad 2: cualquier issue con assignee (ej: Task padre)
+        if (!firstLinked && assigneeAccountId) {
+          firstLinked = { key, assigneeAccountId };
         }
       } catch {
         continue;
       }
     }
-    return null;
+
+    return firstLinked;
   }
 
   async createRefactoringTask(
@@ -310,8 +323,9 @@ export class JiraService {
     devAccountId?: string,
     attachmentMap?: Map<string, string>,
     parentStoryKey?: string,
+    rowLabel?: string,
   ): Promise<JiraIssueRef> {
-    const payload = buildBugPayload(testCaseKey, scenario, analysis, devAccountId, this.cfg);
+    const payload = buildBugPayload(testCaseKey, scenario, analysis, devAccountId, this.cfg, rowLabel);
     const res = await postJson<JiraIssueResponse>(this.client, '/issue', payload);
     const ref: JiraIssueRef = { key: res.data.key, id: res.data.id, url: `${this.cfg.baseUrl}/browse/${res.data.key}` };
 

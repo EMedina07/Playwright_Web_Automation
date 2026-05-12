@@ -1,6 +1,6 @@
 # Arquitectura del Framework QA — Playwright + Cucumber + TypeScript
 
-> **Última actualización:** 2026-05-11 — Incluye sistema de análisis de fallos, creación automática de Bug/Refactoring Task y modelo multi-adaptador.
+> **Última actualización:** 2026-05-12 — Incluye sistema de análisis de fallos, creación automática de Bug/Refactoring Task, modelo multi-adaptador y soporte completo para Scenario Outline con test case por fila.
 
 ---
 
@@ -378,11 +378,14 @@ cucumber-js inicia escenario
 │ - transitionTo(key, names[]): Promise<void> ← privado        │
 │                                                              │
 │  ── ACCIÓN 1: Registro de Caso ─────────────────────────────│
-│ + findExistingIssue(scenario): Promise<JiraIssueRef|null>    │
-│ + createIssue(scenario): Promise<JiraIssueRef>               │
+│ + findExistingIssue(scenario, rowLabel?) → JiraIssueRef|null │
+│ + createIssue(scenario, rowLabel?) → JiraIssueRef            │
 │ + linkToParent(caseKey): Promise<void>                       │
 │ + attachScreenshots(key, scenario): Promise<AttachmentInfo[]>│
 │ + updateDescription(key, scenario, map): Promise<void>       │
+│                                                              │
+│  rowLabel? → sufijo para filas de Scenario Outline           │
+│  (ej: 'qa-row-neg-wrong-user')                               │
 │                                                              │
 │  ── ACCIÓN 2: Actualización en Regresión ───────────────────│
 │ + updateLabels(key, status): Promise<void>                   │
@@ -396,15 +399,15 @@ cucumber-js inicia escenario
 │ + updateRegressionSummaryIssue(key, ...): Promise<void>      │
 │                                                              │
 │  ── ACCIONES 5 y 6: Fallos ─────────────────────────────────│
-│ + findLinkedFailureIssue(key, type): Promise<JiraIssueRef|null>│
-│ + findParentStoryAssignee(key): Promise<string|null>         │
-│ + createRefactoringTask(key, scenario, analysis, map?)       │
-│ + createBug(key, scenario, analysis, devId?, map?)           │
+│ + findLinkedFailureIssue(key, type, rowLabel?)               │
+│     → JiraIssueRef|null                                      │
+│ + getIssueAssignee(key): Promise<string|null>                │
+│ + findLinkedStory(key)                                       │
+│     → { key, assigneeAccountId? }|null                       │
+│ + createRefactoringTask(key, scenario, analysis, id?, map?)  │
+│ + createBug(key, scenario, analysis, devId?, map?,           │
+│             parentStoryKey?, rowLabel?)                      │
 │ + addFailureRecurrenceComment(key, scenario, analysis, date) │
-│                                                              │
-│  ── Deprecado (no usar) ────────────────────────────────────│
-│ + addComment(key, scenario, map?)  ← reemplazado por        │
-│                                       updateDescription      │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -420,11 +423,14 @@ cucumber-js inicia escenario
 │  isRegressionRun(tags[]) → boolean                           │
 │                                                              │
 │  ── ACCIÓN 1 ───────────────────────────────────────────────│
-│  buildNewIssuePayload(scenario, cfg) → object                │
+│  buildNewIssuePayload(scenario, cfg, rowLabel?) → object     │
 │  buildNewIssueDescription(scenario, map?) → ADF              │
 │                                                              │
-│  ── ACCIÓN 2 (comentario — ya no se usa) ───────────────────│
-│  buildCommentBody(scenario, date, map?) → ADF                │
+│  rowLabel? agrega sufijo al summary del issue:               │
+│  "[QA] Feature — Scenario (neg-wrong-user)"                  │
+│                                                              │
+│  ── ACCIÓN 2 ───────────────────────────────────────────────│
+│  buildCommentBody(scenario, date) → ADF                      │
 │                                                              │
 │  ── ACCIÓN 3 ───────────────────────────────────────────────│
 │  buildRegressionSummaryPayload(summary, cfg) → object        │
@@ -436,8 +442,13 @@ cucumber-js inicia escenario
 │  buildRefactoringTaskDescription(key, scenario, analysis, cfg│
 │                                                              │
 │  ── ACCIÓN 6 ───────────────────────────────────────────────│
-│  buildBugPayload(key, scenario, analysis, devId, cfg)        │
+│  buildBugPayload(key, scenario, analysis, devId, cfg,        │
+│                  rowLabel?) → object                         │
 │  buildBugDescription(key, scenario, analysis, cfg) → ADF     │
+│                                                              │
+│  rowLabel? agrega sufijo al summary y label al bug:          │
+│  "[BUG] Feature — Error (neg-wrong-user)"                    │
+│  labels: [..., 'qa-row-neg-wrong-user']                      │
 │                                                              │
 │  ── Recurrencia (Acciones 5 y 6) ───────────────────────────│
 │  buildRecurrenceCommentBody(scenario, analysis, date) → ADF  │
@@ -512,17 +523,25 @@ cucumber-js inicia escenario
 │           (herramienta-agnóstico)        │
 │──────────────────────────────────────────│
 │  Almacena en: reports/.jira/case-registry.dat
-│  Formato: { scenarioId: CaseEntry }      │
+│  Formato: { registryKey: CaseEntry }     │
+│                                          │
+│  registryKey:                            │
+│    Escenario regular → scenarioId        │
+│    Fila de Outline   → scenarioId:rowLabel│
+│                        (ej: id;titulo;qa-row-neg-wrong-user)
 │                                          │
 │  CaseEntry {                             │
 │    issueKey: string                      │
 │    createdAt: string (ISO)               │
 │    lastSyncedAt: string (ISO)            │
+│    lastStatus?: string  ← 'passed'|'failed'
 │  }                                       │
 │──────────────────────────────────────────│
-│  getIssueKey(scenarioId) → string|undef  │
-│  setIssueKey(scenarioId, key) → void     │
-│  touchSync(scenarioId) → void            │
+│  getIssueKey(registryKey) → string|undef │
+│  getLastStatus(registryKey) → string|undef│
+│  setIssueKey(registryKey, key, status?)  │
+│  touchSync(registryKey, status?) → void  │
+│  resetRegistry() → void                 │
 └──────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────┐
@@ -558,8 +577,26 @@ cucumber-js inicia escenario
 │    issueKey                              │
 │  ) → boolean                             │
 │                                          │
-│  Inserta @jira:KEY antes del Scenario    │
-│  en el archivo .feature                  │
+│  Inserta @jira:KEY en la línea de tags   │
+│  del Scenario en el archivo .feature.    │
+│  Idempotente: no duplica si ya existe.   │
+│                                          │
+│  tagOutlineRowsInFeature(                │
+│    featureUri,                           │
+│    scenarioName,                         │
+│    rowTags: Array<{                      │
+│      dataValue: string,                  │
+│      issueKey: string                    │
+│    }>                                    │
+│  ) → void                                │
+│                                          │
+│  Para Scenario Outline con N filas:      │
+│  · Pone todos los @jira:KAN-XX en una    │
+│    sola línea sobre el Scenario Outline  │
+│  · Mantiene un único bloque Examples:   │
+│    con todas las filas juntas            │
+│  · Idempotente: re-ejecutar produce el   │
+│    mismo resultado                       │
 └──────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────┐
@@ -588,28 +625,38 @@ Para cada QACucumberResult:
          │
          ▼
   ┌──────────────────────────────────────────────────────────────┐
-  │  Detección de modo                                           │
-  │  extractIssueTag(tags) → ¿tiene @jira:KEY?                   │
-  │  getIssueKey(scenarioId) → ¿está en registry?                │
-  │  isRegressionRun(tags) → ¿tiene @Regresion?                  │
-  └──────┬─────────────────────────┬───────────────────┬─────────┘
-         │                         │                   │
-  key + @Regresion          key + NO @Regresion    sin key
-         │                         │                   │
-         ▼                         ▼                   ▼
-  ┌─────────────────┐    ┌─────────────────┐  ┌────────────────────────┐
-  │  ACCIÓN 2       │    │    OMITIR       │  │     ACCIÓN 1           │
-  │  Actualizar en  │    │    (retest)     │  │  Registrar Caso Nuevo  │
-  │  Regresión      │    └─────────────────┘  │                        │
-  │                 │                         │  findExistingCase()    │
-  │  attachScreens  │                         │  createCase()          │
-  │  updateDesc     │                         │  linkToParent()        │
-  │  updateLabels   │                         │  attachScreenshots()   │
-  │  transition     │                         │  updateDescription()   │
-  │  touchSync      │                         │  transition()          │
-  │     │           │                         │  setIssueKey()         │
-  │     │           │                         │  tagFeature()          │
-  └─────┼───────────┘                         └────────────────────────┘
+  │  ¿Es fila de Scenario Outline?                               │
+  │  (scenarioId duplicado en el reporte → outlineScenarioIds)   │
+  └──────┬────────────────────────────────┬──────────────────────┘
+         │ SÍ (fila de outline)           │ NO (escenario regular)
+         ▼                                ▼
+  ┌──────────────────────┐   ┌──────────────────────────────────────────┐
+  │ registryKey =        │   │  Detección de modo regular               │
+  │ scenarioId:rowLabel  │   │  extractIssueTag(tags) → @jira:KEY?      │
+  │                      │   │  getIssueKey(scenarioId) → en registry?  │
+  │ getIssueKey(key)?    │   │  isRegressionRun(tags) → @Regresion?     │
+  └──────┬───────────────┘   └──────┬───────────────┬──────────┬────────┘
+         │                          │               │          │
+   Sí (existe)  No               key+@Reg       key+NO@Reg  sin key
+         │       │                  │               │          │
+         ▼       ▼                  ▼               ▼          ▼
+  ┌──────────┐ ┌────────┐  ┌─────────────┐  ┌──────────┐ ┌──────────────┐
+  │ACCIÓN 2  │ │ACCIÓN 1│  │  ACCIÓN 2   │  │  OMITIR  │ │  ACCIÓN 1   │
+  │(regresión│ │(crear  │  │ (regresión) │  │ (retest) │ │ (crear)     │
+  │ por fila)│ │por fila│  └──────┬──────┘  └──────────┘ └──────┬──────┘
+  └────┬─────┘ └────────┘         │                              │
+       │                          │     [Acción 1 en ambos paths:]
+       │                          │     findExistingCase()
+       │                          │     createCase()
+       │                          │     linkToParent()
+       │                          │     attachScreenshots()
+       │                          │     updateDescription()
+       │                          │     transition()
+       │                          │     setIssueKey()
+       │                          │     tagFeature() ← solo en regular
+       │                          │
+  ┌────┴──────────────────────────┘
+  │ Si status === 'failed' (ambos paths):
         │
         │ Si status === 'failed':
         ▼
@@ -832,12 +879,15 @@ createBug() necesita asignar al developer
 │  │  1. Carga JiraConfig (.env.{env})                                   │   │
 │  │  2. Verifica conexión (fail-fast)                                   │   │
 │  │  3. Parsea cucumber-report.json → QARunSummary                      │   │
-│  │  4. Para cada scenario → syncScenario()                             │   │
-│  │       ├─ Acción 1 (crear) / Acción 2 (actualizar) / omitir         │   │
-│  │       └─ Si failed: Acción 4 → Acción 5 o 6 (con deduplicación)    │   │
-│  │  5. Dashboard (una vez por ambiente)                                │   │
-│  │  6. Acción 3: upsert resumen de regresión                           │   │
-│  │  7. Estadísticas (creados / actualizados / omitidos / errores)      │   │
+│  │  4. Detecta Scenario Outlines: scenarioIds duplicados               │   │
+│  │  5. Para cada scenario → syncScenario()                             │   │
+│  │       ├─ Outline row → Acción 1 o 2 (compound registry key)        │   │
+│  │       ├─ Regular → Acción 1 / Acción 2 / omitir                    │   │
+│  │       └─ Si failed → Acción 4 → Acción 5 o 6                       │   │
+│  │  6. Post-loop: tagOutlineRowsInFeature() por cada outline           │   │
+│  │  7. Dashboard (una vez por ambiente)                                │   │
+│  │  8. Acción 3: upsert resumen de regresión                           │   │
+│  │  9. Estadísticas (creados / actualizados / omitidos / errores)      │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -908,8 +958,13 @@ test-results/
 └── traces/
     └── {scenario-slug}-{id}.zip
 
-src/test/features/**/*.feature    ← Modificados dinámicamente por FeatureTagger
-                                    para agregar @jira:KEY al crear un issue
+src/test/features/**/*.feature    ← Modificados dinámicamente por FeatureTagger:
+                                    · Escenario regular → inserta @jira:KEY
+                                      en la línea de tags del Scenario
+                                    · Scenario Outline → inserta todos los
+                                      @jira:KAN-XX en una sola línea de tags
+                                      sobre el Scenario Outline y mantiene
+                                      un único bloque Examples: con todas las filas
 ```
 
 ---
