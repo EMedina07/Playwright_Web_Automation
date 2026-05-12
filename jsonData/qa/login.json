@@ -18,7 +18,7 @@
   },
   {
     "id": "neg-wrong-user",
-    "username": "usernotexist",
+    "username": "wronguser123",
     "password": "admin123",
     "expectedError": "Invalid credentials"
   },

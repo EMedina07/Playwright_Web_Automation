@@ -1,6 +1,6 @@
 # Arquitectura del Framework QA — Playwright + Cucumber + TypeScript
 
-> **Última actualización:** 2026-05-12 — Incluye sistema de análisis de fallos, creación automática de Bug/Refactoring Task, modelo multi-adaptador y soporte completo para Scenario Outline con test case por fila.
+> **Última actualización:** 2026-05-12 — Incluye sistema de análisis de fallos, creación automática de Bug/Refactoring Task, modelo multi-adaptador, soporte completo para Scenario Outline con test case por fila, fallback de Jira para outline rows con registry vacío, y sincronización bidireccional en modo RETEST.
 
 ---
 
@@ -635,16 +635,20 @@ Para cada QACucumberResult:
   │ scenarioId:rowLabel  │   │  extractIssueTag(tags) → @jira:KEY?      │
   │                      │   │  getIssueKey(scenarioId) → en registry?  │
   │ getIssueKey(key)?    │   │  isRegressionRun(tags) → @Regresion?     │
-  └──────┬───────────────┘   └──────┬───────────────┬──────────┬────────┘
+  │ No → findExisting()  │   └──────┬───────────────┬──────────┬────────┘
+  │   en Jira (fallback) │          │               │          │
+  └──────┬───────────────┘       key+@Reg       key+NO@Reg  sin key
          │                          │               │          │
-   Sí (existe)  No               key+@Reg       key+NO@Reg  sin key
-         │       │                  │               │          │
-         ▼       ▼                  ▼               ▼          ▼
-  ┌──────────┐ ┌────────┐  ┌─────────────┐  ┌──────────┐ ┌──────────────┐
-  │ACCIÓN 2  │ │ACCIÓN 1│  │  ACCIÓN 2   │  │  OMITIR  │ │  ACCIÓN 1   │
-  │(regresión│ │(crear  │  │ (regresión) │  │ (retest) │ │ (crear)     │
-  │ por fila)│ │por fila│  └──────┬──────┘  └──────────┘ └──────┬──────┘
-  └────┬─────┘ └────────┘         │                              │
+   Sí (existe)  No                  ▼               ▼          ▼
+         │       │         ┌─────────────┐  ┌──────────────┐ ┌──────────────┐
+         ▼       ▼         │  ACCIÓN 2   │  │  RETEST      │ │  ACCIÓN 1   │
+  ┌──────────┐ ┌────────┐  │ (regresión  │  │ handleRegres │ │ (crear)     │
+  │ACCIÓN 2  │ │ACCIÓN 1│  │  completa)  │  │ ionScenario()│ │             │
+  │(regresión│ │(crear  │  └──────┬──────┘  │ passed→passed│ └──────┬──────┘
+  │ por fila)│ │por fila│         │         │  → [SKIPPED] │        │
+  └────┬─────┘ └────────┘         │         │ cambio estado│        │
+       │                          │         │  sin bug/ref │        │
+       │                          │         └──────────────┘        │
        │                          │     [Acción 1 en ambos paths:]
        │                          │     findExistingCase()
        │                          │     createCase()
@@ -881,9 +885,15 @@ createBug() necesita asignar al developer
 │  │  3. Parsea cucumber-report.json → QARunSummary                      │   │
 │  │  4. Detecta Scenario Outlines: scenarioIds duplicados               │   │
 │  │  5. Para cada scenario → syncScenario()                             │   │
-│  │       ├─ Outline row → Acción 1 o 2 (compound registry key)        │   │
-│  │       ├─ Regular → Acción 1 / Acción 2 / omitir                    │   │
-│  │       └─ Si failed → Acción 4 → Acción 5 o 6                       │   │
+│  │       ├─ Outline row: registry → si vacío, fallback findExisting() │   │
+│  │       │    Acción 1 (primera vez) o Acción 2 (ya existe en Jira)   │   │
+│  │       │    Si failed → Acción 4 → Acción 5 o 6                     │   │
+│  │       ├─ Regular con @Regresion → Acción 2                         │   │
+│  │       │    Si failed → Acción 4 → Acción 5 o 6                     │   │
+│  │       ├─ Regular sin @Regresion (RETEST) → handleRegressionScenario│   │
+│  │       │    passed→passed: [SKIPPED] sin cambio en Jira             │   │
+│  │       │    cambio de estado: actualiza Jira (sin bug/refactoring)  │   │
+│  │       └─ Regular sin key → Acción 1 (crear)                        │   │
 │  │  6. Post-loop: tagOutlineRowsInFeature() por cada outline           │   │
 │  │  7. Dashboard (una vez por ambiente)                                │   │
 │  │  8. Acción 3: upsert resumen de regresión                           │   │

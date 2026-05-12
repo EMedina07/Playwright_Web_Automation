@@ -2,7 +2,7 @@
 
 > **Este documento es LEY.** Toda integración nueva, sin importar la herramienta de gestión de proyectos (Jira, TestRail, Azure DevOps, Linear, Notion, etc.), debe respetar la arquitectura, los contratos de datos, los patrones y los estándares definidos aquí. Nada de esto es opcional.
 >
-> **Última actualización:** 2026-05-12 — Incluye las 6 acciones del sistema, patrón multi-adaptador, análisis de fallos y soporte de Scenario Outline con test case por fila.
+> **Última actualización:** 2026-05-12 — Incluye las 6 acciones del sistema, patrón multi-adaptador, análisis de fallos, soporte de Scenario Outline con test case por fila, fallback de Jira para outline rows con registry vacío, y sincronización bidireccional en modo RETEST.
 
 ---
 
@@ -122,7 +122,9 @@ QA Bridge ejecuta exactamente **6 acciones** independientes. Cada acción es un 
 
 ### ACCIÓN 2 — Actualización de Caso en Regresión
 
-**¿Cuándo se ejecuta?** Cuando un escenario ya tiene un issue vinculado (tag `@jira:KEY` o registry) **y** está marcado con `@Regresion`.
+**¿Cuándo se ejecuta?** En dos situaciones:
+1. Escenario con issue vinculado (tag `@jira:KEY` o registry) **y** marcado con `@Regresion` — actualización completa siempre.
+2. Escenario con issue vinculado **sin** `@Regresion` (modo RETEST) — se llama la misma función pero solo actúa si el estado cambió. Si `passed → passed`: `[SKIPPED]` sin tocar Jira. Si hay cambio (falla o recuperación): actualiza descripción, labels y transición. **Nunca crea bug/refactoring en modo RETEST.**
 
 **¿Qué hace?**
 1. Adjunta nuevas screenshots (evidencias de la ejecución actual)
@@ -323,7 +325,12 @@ npm run test:qa
     │   │       ├─ framework + agentMode  → [señal para agente, no escribe]
     │   │       └─ application            → ACCIÓN 6 (Bug)
     │   │
-    │   └─ Con key + sin @Regresion → OMITIR (retest)
+    │   └─ Con key + sin @Regresion → RETEST (handleRegressionScenario)
+    │       ├─ passed → passed: [SKIPPED] sin cambio en Jira
+    │       ├─ cualquier cambio de estado: ACCIÓN 2 (sin bug/refactoring)
+    │       │   · failed: actualiza → transición a Failed
+    │       │   · passed (recuperación desde failed): actualiza → transición a Done
+    │       └─ Acciones 4/5/6 NUNCA se ejecutan en modo RETEST
     │
     └─ Al finalizar todos los scenarios:
         └─ ACCIÓN 3 (Upsert Test Run de Regresión)
@@ -345,8 +352,10 @@ isRegressionRun(tags: string[]): boolean               // @Regresion
 ```
 
 Lógica de decisión para escenarios regulares:
-- `key existe && isRegression` → Acción 2 (actualizar)
-- `key existe && !isRegression` → omitir
+- `key existe && isRegression` → Acción 2 completa + Acciones 4/5/6 si falla
+- `key existe && !isRegression` → RETEST: `handleRegressionScenario` (sin bug/refactoring)
+  - `passed → passed`: `[SKIPPED]` sin cambio en Jira
+  - cambio de estado (falla o recuperación): actualiza descripción, labels, transición
 - `key no existe` → Acción 1 (crear)
 
 **Scenario Outline rows** — detección especial obligatoria:
@@ -379,7 +388,10 @@ function deriveRowLabel(scenario, outlineScenarioIds): string | undefined {
 Lógica de decisión para outline rows (BYPASS de isRegressionRun):
 - `rowRegistryKey = scenarioId:rowLabel`
 - `getIssueKey(rowRegistryKey) existe` → Acción 2 (actualizar como regresión)
-- `getIssueKey(rowRegistryKey) no existe` → Acción 1 (crear con sufijo de fila)
+- `getIssueKey(rowRegistryKey) no existe` → **fallback**: `findExistingIssue(scenario, rowLabel)`
+  - Si encontrado en Jira → `setIssueKey(rowRegistryKey, found.key)` → Acción 2 (regresión)
+  - Si no encontrado → Acción 1 (crear con sufijo de fila)
+- Este fallback garantiza que `JIRA_RESET_REGISTRY=true` no rompa la detección de regresión para outline rows
 
 ### 2. Registry persistente (case-registry)
 
@@ -451,8 +463,9 @@ tagOutlineRowsInFeature(featureUri, scenarioName, rowTags)
 // rowTags = [{ dataValue: 'neg-wrong-user', issueKey: 'KAN-86' }, ...]
 //
 // Resultado en el .feature:
-// @jira:KAN-85 @jira:KAN-86 @jira:KAN-87 @Regresion
+// @jira:KAN-85 @jira:KAN-86 @jira:KAN-87
 // Scenario Outline: Login con credenciales inválidas...
+// (solo @jira:KAN-XX, sin @Regresion — los outline rows usan el registry como fuente de verdad)
 //   Examples:
 //     | dataId             |
 //     | neg-wrong-password |
@@ -860,5 +873,5 @@ Seguir todos los patrones obligatorios de QA-BRIDGE-INTEGRATION-PROMPT.md.
 | HTML como adjunto | Jira renderiza HTML como código fuente, no como página | Solo adjuntar PNG como evidencias |
 | Tipo de issue `Bug` | No todos los proyectos Jira tienen el tipo `Bug` disponible | Configurar `JIRA_BUG_ISSUE_TYPE=Task` y usar labels `qa-failure-bug` |
 | Transición a `Failed` | Estado `Failed` no existe en todos los proyectos | El sistema busca por lista de nombres en español e inglés |
-| Tags en Scenario Outline rows | `@cucumber/cucumber` (v11+) no propaga las tags del `Scenario Outline:` a los elementos individuales de cada fila en el JSON — cada row tiene `tags: []` | Detectar outline rows por `scenarioId` duplicado en el reporte. Usar compound registry key `scenarioId:rowLabel`. El `@Regresion` de las filas se detecta via registry, no via tags. |
+| Tags en Scenario Outline rows | `@cucumber/cucumber` (v11+) no propaga las tags del `Scenario Outline:` a los elementos individuales de cada fila en el JSON — cada row tiene `tags: []` | Detectar outline rows por `scenarioId` duplicado en el reporte. Usar compound registry key `scenarioId:rowLabel`. El `@Regresion` de las filas se detecta via registry, no via tags. Si el registry fue limpiado (`JIRA_RESET_REGISTRY=true`), se usa `findExistingIssue` como fallback antes de crear uno nuevo. |
 | Resumen de regresión con outlines | `buildRegressionSummaryDescription` usa `scenarios.find(s => s.scenarioName === r.scenarioName)` — para filas de outline con el mismo `scenarioName`, la tabla puede mostrar el estado de la primera fila para todas | Limitación menor que solo afecta la tabla visual del issue de resumen. Los issues individuales de cada fila son correctos. |

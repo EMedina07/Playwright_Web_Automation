@@ -224,8 +224,7 @@ async function syncScenario(
   }
 
   if (existingKey && !isRegression) {
-    console.log(`  [RETEST] Omitido: "${scenario.scenarioName}" → ${existingKey}`);
-    return { scenarioName: scenario.scenarioName, featureName: scenario.featureName, status: scenario.status, action: 'skipped', issueKey: existingKey };
+    return handleRegressionScenario(jira, scenario, existingKey, scenario.scenarioId);
   }
 
   return handleNewScenario(jira, scenario, cfg, scenario.scenarioId);
