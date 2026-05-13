@@ -11,7 +11,9 @@ import { extractJiraTag, isRegressionRun } from '../core/integrations/mappers/Ji
 import { JiraService } from '../core/integrations/services/JiraService';
 import { JiraDashboardService } from '../core/integrations/services/JiraDashboardService';
 import { getIssueKey, setIssueKey, resetRegistry, getLastStatus } from '../core/integrations/utils/case-registry';
-import { tagScenarioInFeature, tagOutlineRowsInFeature } from '../core/integrations/FeatureTagger';
+import { tagScenarioInFeature } from '../core/integrations/FeatureTagger';
+// tagOutlineRowsInFeature NO se importa: escribir tags en .feature desplaza líneas
+// → cambia scenarioId de Cucumber → invalida el registry → crea issues duplicados.
 import { shouldGenerateDashboard } from '../core/integrations/DashboardGenerator';
 import { JiraSyncResult, QACucumberResult } from '../core/integrations/types/qa-bridge.types';
 import { analyzeFailure } from '../core/integrations/utils/failure-analyzer';
@@ -305,9 +307,7 @@ async function main(): Promise<void> {
       const dataValue = rowLabel.replace('qa-row-', '');
       outlineGroupMap.get(groupKey)!.rows.push({ dataValue, issueKey: result.issueKey });
     }
-    for (const { featureUri, scenarioName, rows } of outlineGroupMap.values()) {
-      tagOutlineRowsInFeature(featureUri, scenarioName, rows);
-    }
+    // Nota: tagOutlineRowsInFeature NO se llama aquí. Ver comentario en el import.
   }
 
   // Jira Dashboard — create once
