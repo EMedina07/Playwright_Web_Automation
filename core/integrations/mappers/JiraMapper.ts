@@ -198,7 +198,7 @@ export function buildNewIssueDescription(
     parsedSteps.forEach((card) => {
       const filename = `evidencia-step-${String(card.stepIndex).padStart(2, '0')}-${card.type}.png`;
       const url = attachmentMap?.get(filename) ?? null;
-      content.push(buildStepPanel(card, filename, url));
+      content.push(buildStepPanel(card, url ? filename : null, url));
     });
   } else {
     scenario.steps.forEach((s) => {
