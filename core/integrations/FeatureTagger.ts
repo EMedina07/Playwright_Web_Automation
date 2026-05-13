@@ -158,8 +158,12 @@ export function tagScenarioInFeature(
   const indent = lines[scenarioIdx].match(/^(\s*)/)?.[1] ?? '';
 
   if (tagsIdx !== -1) {
-    // Append tag to existing tags line
-    lines[tagsIdx] = `${lines[tagsIdx].trimEnd()} ${tag}`;
+    // Replace existing @jira:KAN-XXX tag if present, otherwise append
+    if (/@jira:[A-Z][A-Z0-9]*-\d+/.test(lines[tagsIdx])) {
+      lines[tagsIdx] = lines[tagsIdx].replace(/@jira:[A-Z][A-Z0-9]*-\d+/g, tag).trimEnd();
+    } else {
+      lines[tagsIdx] = `${lines[tagsIdx].trimEnd()} ${tag}`;
+    }
   } else {
     // Insert new tags line above scenario
     lines.splice(scenarioIdx, 0, `${indent}${tag}`);

@@ -1,12 +1,17 @@
 import { Locator, Page } from 'playwright';
 import { expect } from '@playwright/test';
 import { BasePage } from './BasePage';
-import { IAttachFn } from '../../core/framework_actions/StepLogger';
+import { IAttachFn, StepRecord } from '../../core/framework_actions/StepLogger';
 import environments from '../../core/settings/EnvironmentSettings';
 
 export abstract class PageHelpers extends BasePage {
-  constructor(page: Page, attachFn?: IAttachFn, stepCounter?: { value: number }) {
-    super(page, attachFn, stepCounter);
+  constructor(
+    page: Page,
+    attachFn?: IAttachFn,
+    stepCounter?: { value: number },
+    recordStep?: (record: StepRecord) => void,
+  ) {
+    super(page, attachFn, stepCounter, recordStep);
   }
 
   protected async navigateAndCapture(

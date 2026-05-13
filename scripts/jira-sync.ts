@@ -43,15 +43,9 @@ async function handleNewScenario(
     const issueRef = await jira.createIssue(scenario, rowLabel);
     await jira.linkToParent(issueRef.key);
 
-    // Upload screenshots → get content URLs → update description with clickable links
-    if (scenario.screenshots.length > 0) {
-      const attachments = await jira.attachScreenshots(issueRef.key, scenario);
-      if (attachments.length > 0) {
-        const attachmentMap = new Map(attachments.map((a) => [a.filename, a.contentUrl]));
-        await jira.updateDescription(issueRef.key, scenario, attachmentMap);
-        console.log(`    🔗 Descripción actualizada con links a evidencias`);
-      }
-    }
+    const pdfPath = findScenarioPdf(scenario);
+    if (pdfPath) await jira.attachPdf(issueRef.key, pdfPath);
+    await jira.updateDescription(issueRef.key, scenario, new Map());
 
     if (scenario.status === 'passed') {
       await jira.transitionToDone(issueRef.key);
@@ -76,6 +70,7 @@ async function handleRegressionScenario(
   scenario: QACucumberResult,
   issueKey: string,
   registryKey: string,
+  cfg: ReturnType<typeof loadJiraConfig>,
 ): Promise<JiraSyncResult> {
   const lastStatus = getLastStatus(registryKey);
   if (scenario.status === 'passed' && lastStatus === 'passed') {
@@ -86,16 +81,10 @@ async function handleRegressionScenario(
 
   console.log(`  [REGRESSION] Actualizando ${issueKey} para: "${scenario.scenarioName}"`);
   try {
-    let attachmentMap: Map<string, string> | undefined;
-    if (scenario.screenshots.length > 0) {
-      const attachments = await jira.attachScreenshots(issueKey, scenario);
-      if (attachments.length > 0) {
-        attachmentMap = new Map(attachments.map((a) => [a.filename, a.contentUrl]));
-      }
-    }
-
-    await jira.updateDescription(issueKey, scenario, attachmentMap ?? new Map());
-    console.log(`    🔗 Descripción actualizada con evidencias de regresión`);
+    const pdfPath = findScenarioPdf(scenario);
+    if (pdfPath) await jira.attachPdf(issueKey, pdfPath);
+    await jira.updateDescription(issueKey, scenario, new Map());
+    console.log(`    🔗 Descripción actualizada con evidencia PDF`);
 
     await jira.updateLabels(issueKey, scenario.status);
 
@@ -109,10 +98,28 @@ async function handleRegressionScenario(
     console.log(`  ✅ Issue actualizado: ${issueKey}`);
     return { scenarioName: scenario.scenarioName, featureName: scenario.featureName, status: scenario.status, action: 'updated', issueKey };
   } catch (err: unknown) {
+    const status = (err as any)?.response?.status;
+    if (status === 404) {
+      // Issue no existe en Jira — fue eliminado o el tag quedó huérfano → crear nuevo
+      console.warn(`  ⚠️ Issue ${issueKey} no encontrado (404), creando nuevo...`);
+      return handleNewScenario(jira, scenario, cfg, registryKey);
+    }
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`  ❌ Error actualizando issue: ${msg}`);
     return { scenarioName: scenario.scenarioName, featureName: scenario.featureName, status: scenario.status, action: 'error', error: msg };
   }
+}
+
+function findScenarioPdf(scenario: QACucumberResult): string | null {
+  const featureName = path.basename(path.dirname(scenario.featureUri));
+  const slug = scenario.scenarioName.replace(/\s+/g, '-').toLowerCase().slice(0, 60);
+  const pdfDir = path.resolve(process.cwd(), 'reports', 'pdf', featureName);
+  if (!fs.existsSync(pdfDir)) return null;
+  const files = fs.readdirSync(pdfDir)
+    .filter((f) => f.startsWith(slug) && f.endsWith('.pdf'))
+    .map((f) => ({ name: f, mtime: fs.statSync(path.join(pdfDir, f)).mtimeMs }))
+    .sort((a, b) => b.mtime - a.mtime);
+  return files.length > 0 ? path.join(pdfDir, files[0].name) : null;
 }
 
 function deriveRowLabel(scenario: QACucumberResult, outlineScenarioIds: Set<string>): string | undefined {
@@ -133,7 +140,6 @@ async function handleFailureAnalysis(
   jira: JiraService,
   scenario: QACucumberResult,
   issueKey: string,
-  attachmentMap: Map<string, string>,
   rowLabel?: string,
 ): Promise<void> {
   const runDate = new Date().toISOString().slice(0, 10);
@@ -155,14 +161,14 @@ async function handleFailureAnalysis(
     } else if (analysis.classification === 'framework') {
       const qaAccountId = await jira.getIssueAssignee(issueKey);
       if (qaAccountId) console.log(`    👤 Asignando refactorización al QA del caso: ${qaAccountId}`);
-      const taskRef = await jira.createRefactoringTask(issueKey, scenario, analysis, qaAccountId ?? undefined, attachmentMap);
+      const taskRef = await jira.createRefactoringTask(issueKey, scenario, analysis, qaAccountId ?? undefined, new Map());
       console.log(`    🔧 Tarea de refactorización creada: ${taskRef.url}`);
     } else {
       const parentStory = await jira.findLinkedStory(issueKey);
       const devAccountId = parentStory?.assigneeAccountId ?? null;
       if (devAccountId) console.log(`    👤 Asignando bug al developer de la historia padre (${parentStory?.key}): ${devAccountId}`);
       if (parentStory?.key) console.log(`    🔗 Vinculando bug a la historia padre: ${parentStory.key}`);
-      const bugRef = await jira.createBug(issueKey, scenario, analysis, devAccountId ?? undefined, attachmentMap, parentStory?.key, rowLabel);
+      const bugRef = await jira.createBug(issueKey, scenario, analysis, devAccountId ?? undefined, new Map(), parentStory?.key, rowLabel);
       console.log(`    🐛 Bug creado: ${bugRef.url}${rowTag}`);
     }
   } catch (failErr: unknown) {
@@ -201,9 +207,9 @@ async function syncScenario(
 
     if (existingKey) {
       // Ya existe (en registry o recuperado de Jira) → actualizar como regresión
-      const result = await handleRegressionScenario(jira, scenario, existingKey, rowRegistryKey);
+      const result = await handleRegressionScenario(jira, scenario, existingKey, rowRegistryKey, cfg);
       if (scenario.status === 'failed' && result.action !== 'error') {
-        await handleFailureAnalysis(jira, scenario, existingKey, new Map(), rowLabel);
+        await handleFailureAnalysis(jira, scenario, existingKey, rowLabel);
       }
       return result;
     }
@@ -218,15 +224,15 @@ async function syncScenario(
   const existingKey = jiraTagKey ?? getIssueKey(scenario.scenarioId);
 
   if (existingKey && isRegression) {
-    const result = await handleRegressionScenario(jira, scenario, existingKey, scenario.scenarioId);
+    const result = await handleRegressionScenario(jira, scenario, existingKey, scenario.scenarioId, cfg);
     if (scenario.status === 'failed' && result.action !== 'error') {
-      await handleFailureAnalysis(jira, scenario, existingKey, new Map());
+      await handleFailureAnalysis(jira, scenario, existingKey);
     }
     return result;
   }
 
   if (existingKey && !isRegression) {
-    return handleRegressionScenario(jira, scenario, existingKey, scenario.scenarioId);
+    return handleRegressionScenario(jira, scenario, existingKey, scenario.scenarioId, cfg);
   }
 
   return handleNewScenario(jira, scenario, cfg, scenario.scenarioId);

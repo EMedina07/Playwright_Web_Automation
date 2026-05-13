@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { AxiosInstance } from 'axios';
 import FormData from 'form-data';
 import { QACucumberResult, JiraIssueRef, JiraSyncResult } from '../types/qa-bridge.types';
@@ -345,14 +347,6 @@ export class JiraService {
       });
     }
 
-    if (scenario.screenshots.length > 0) {
-      try {
-        await this.attachScreenshots(ref.key, scenario);
-      } catch {
-        // Non-fatal — attachments already exist on the test case
-      }
-    }
-
     return ref;
   }
 
@@ -364,5 +358,14 @@ export class JiraService {
   ): Promise<void> {
     const body = buildRecurrenceCommentBody(scenario, analysis, runDate);
     await postJson(this.client, `/issue/${issueKey}/comment`, { body });
+  }
+
+  async attachPdf(issueKey: string, pdfPath: string): Promise<void> {
+    if (!fs.existsSync(pdfPath)) return;
+    const form = new FormData();
+    const buffer = fs.readFileSync(pdfPath);
+    form.append('file', buffer, { filename: path.basename(pdfPath), contentType: 'application/pdf' });
+    await postFormData(this.client, `/issue/${issueKey}/attachments`, form);
+    console.log(`    📄 PDF adjuntado a ${issueKey}: ${path.basename(pdfPath)}`);
   }
 }

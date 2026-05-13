@@ -1,6 +1,6 @@
 import { Locator, Page } from 'playwright';
 import { PageHelpers } from './PageHelpers';
-import { IAttachFn } from '../../core/framework_actions/StepLogger';
+import { IAttachFn, StepRecord } from '../../core/framework_actions/StepLogger';
 
 const LOGIN_PATH = '/web/index.php/auth/login';
 const DASHBOARD_PATH = '/web/index.php/dashboard/index';
@@ -14,8 +14,13 @@ export class LoginPage extends PageHelpers {
   private readonly credentialsError: Locator;
   private readonly sidebarMenu: Locator;
 
-  constructor(page: Page, attachFn?: IAttachFn, stepCounter?: { value: number }) {
-    super(page, attachFn, stepCounter);
+  constructor(
+    page: Page,
+    attachFn?: IAttachFn,
+    stepCounter?: { value: number },
+    recordStep?: (record: StepRecord) => void,
+  ) {
+    super(page, attachFn, stepCounter, recordStep);
     this.usernameInput = page.getByPlaceholder('Username');
     this.passwordInput = page.getByPlaceholder('Password');
     this.loginButton = page.getByRole('button', { name: 'Login' });
