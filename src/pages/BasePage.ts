@@ -1,11 +1,12 @@
 import { Locator, Page } from 'playwright';
-import { IAttachFn, ActionType, renderCard } from '../../core/framework_actions/StepLogger';
+import { IAttachFn, ActionType, StepRecord, renderCard } from '../../core/framework_actions/StepLogger';
 
 export abstract class BasePage {
   constructor(
     protected readonly page: Page,
     private readonly attachFn?: IAttachFn,
     private readonly stepCounter?: { value: number },
+    private readonly recordStep?: (record: StepRecord) => void,
   ) {}
 
   // Espera dos ciclos de animación para que Vue/React termine de pintar la UI
@@ -43,6 +44,7 @@ export abstract class BasePage {
       this.stepCounter.value++;
       const card = renderCard(this.stepCounter.value, type, description, code, screenshot, false);
       await this.attachFn(card, 'text/html');
+      this.recordStep?.({ index: this.stepCounter.value, type, description, code, screenshot, failed: false });
     } catch {}
   }
 
@@ -68,6 +70,7 @@ export abstract class BasePage {
         this.stepCounter.value++;
         const card = renderCard(this.stepCounter.value, 'ASSERT', description, code, screenshot, failed);
         await this.attachFn(card, 'text/html');
+        this.recordStep?.({ index: this.stepCounter.value, type: 'ASSERT', description, code, screenshot, failed });
       } catch {}
     }
 
@@ -98,6 +101,7 @@ export abstract class BasePage {
       this.stepCounter.value++;
       const card = renderCard(this.stepCounter.value, type, description, code, screenshot, false);
       await this.attachFn(card, 'text/html');
+      this.recordStep?.({ index: this.stepCounter.value, type, description, code, screenshot, failed: false });
     } catch {}
   }
 

@@ -5,6 +5,7 @@ import * as path from 'path';
 import { chromium } from 'playwright';
 import { launchOptions, contextOptions } from '../config/browser.config';
 import { CustomWorld } from './world';
+import { generateScenarioPdf } from '../../core/reports/PdfReporter';
 
 setDefaultTimeout(60_000);
 
@@ -78,6 +79,22 @@ After(async function (this: CustomWorld, scenario) {
   const featureName = extractFeatureName(scenario.pickle.uri);
   const tracePrefix = `${scenarioSlug}-${scenario.pickle.id.slice(0, 8)}`;
   const videoDir = path.join('test-results', 'videos', featureName);
+
+  // Generate PDF evidence only on final execution (not intermediate retries)
+  if (!willBeRetried && this.stepRecords.length > 0) {
+    try {
+      const pdfPath = await generateScenarioPdf(
+        {
+          name: scenario.pickle.name,
+          featureName,
+          status: failed ? 'failed' : 'passed',
+          tags: scenario.pickle.tags.map((t) => t.name),
+        },
+        this.stepRecords,
+      );
+      this.attach(`PDF de evidencia: ${path.resolve(pdfPath)}`, 'text/plain');
+    } catch {}
+  }
 
   if (failed && !willBeRetried) {
     // Final failure — save all evidence

@@ -1,4 +1,13 @@
 export type IAttachFn = (data: Buffer | string, mediaType: string) => void | Promise<void>;
+
+export interface StepRecord {
+  index: number;
+  type: string;
+  description: string;
+  code: string;
+  screenshot: Buffer;
+  failed: boolean;
+}
 export type ActionType =
   | 'NAVIGATE'  // goto a URL
   | 'FILL'      // escribir en un campo de texto
