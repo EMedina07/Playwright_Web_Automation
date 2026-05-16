@@ -411,6 +411,32 @@ export function buildRegressionSummaryDescription(
   return adfDoc(...content);
 }
 
+// ─── Priority derivation ──────────────────────────────────────────────────
+// Matrix: QA_RUN_TYPE × @smoke tag → Jira priority name
+//
+// Priority names are configurable via env vars to support any tool/language:
+//   QA_PRIORITY_CRITICAL → release|regression + @smoke  (default: "Highest")
+//   QA_PRIORITY_HIGH     → release|regression | dev + @smoke (default: "High")
+//   QA_PRIORITY_MEDIUM   → development (default: "Medium")
+//
+// Examples:
+//   English custom: QA_PRIORITY_CRITICAL=Blocker  QA_PRIORITY_HIGH=Critical  QA_PRIORITY_MEDIUM=Major
+//   Spanish:        QA_PRIORITY_CRITICAL=Crítico   QA_PRIORITY_HIGH=Alto      QA_PRIORITY_MEDIUM=Medio
+
+function deriveBugPriority(tags: string[]): string {
+  const runType = (process.env.QA_RUN_TYPE ?? 'development').toLowerCase();
+  const isSmoke = tags.some((t) => t === '@smoke');
+
+  const critical = process.env.QA_PRIORITY_CRITICAL ?? 'Highest';
+  const high     = process.env.QA_PRIORITY_HIGH     ?? 'High';
+  const medium   = process.env.QA_PRIORITY_MEDIUM   ?? 'Medium';
+
+  if (runType === 'release' || runType === 'regression') {
+    return isSmoke ? critical : high;
+  }
+  return isSmoke ? high : medium;
+}
+
 // ─── Payload builders ─────────────────────────────────────────────────────
 
 export function buildNewIssuePayload(
@@ -664,6 +690,7 @@ export function buildBugPayload(
   const rowSuffix = rowLabel ? ` (${rowLabel.replace('qa-row-', '')})` : '';
   const labels = ['qa-automation', 'qa-failure-bug', analysis.errorCategory];
   if (rowLabel) labels.push(rowLabel);
+  const priority = deriveBugPriority(scenario.tags);
   return {
     fields: {
       project: { key: cfg.projectKey },
@@ -671,6 +698,7 @@ export function buildBugPayload(
       description: buildBugDescription(testCaseKey, scenario, analysis, cfg),
       issuetype: { name: issueTypeName },
       labels,
+      priority: { name: priority },
       ...(cfg.epicKey ? { parent: { key: cfg.epicKey } } : {}),
       ...(assigneeId ? { assignee: { accountId: assigneeId } } : {}),
       ...(cfg.sprintUrl ? { customfield_10062: cfg.sprintUrl } : {}),

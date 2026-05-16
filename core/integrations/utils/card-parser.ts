@@ -63,6 +63,11 @@ export function parseTimingCard(html: string): ParsedTimingCard | null {
   };
 }
 
+export function extractScreenshotFromCard(html: string): string | null {
+  const match = html.match(/<img src="data:image\/png;base64,([^"]+)"/);
+  return match ? match[1] : null;
+}
+
 export function parseAllCards(htmlCards: string[]): {
   steps: ParsedStepCard[];
   timing: ParsedTimingCard | null;

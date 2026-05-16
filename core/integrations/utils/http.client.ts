@@ -15,7 +15,7 @@ function isRetryable(status: number): boolean {
 export function createJiraClient(baseUrl: string, email: string, apiToken: string): AxiosInstance {
   const token = Buffer.from(`${email}:${apiToken}`).toString('base64');
   const instance = axios.create({
-    baseURL: `${baseUrl}/rest/api/3`,
+    baseURL: `${baseUrl.replace(/\/+$/, '')}/rest/api/3`,
     headers: {
       Authorization: `Basic ${token}`,
       'Content-Type': 'application/json',

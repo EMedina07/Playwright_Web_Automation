@@ -17,6 +17,7 @@ export type ApplicationErrorCategory =
   | 'assertion-url'
   | 'assertion-value'
   | 'assertion-generic'
+  | 'sla-violation'
   | 'unknown-application';
 
 export type ErrorCategory = FrameworkErrorCategory | ApplicationErrorCategory;
@@ -42,10 +43,10 @@ const FRAMEWORK_PATTERNS: Array<{
   fix: string;
 }> = [
   {
-    pattern: /TimeoutError|Timeout \d+ms exceeded|page\.waitForSelector|locator\.waitFor/i,
+    pattern: /TimeoutError|Timeout \d+ms exceeded|Timeout of \d+ms|still not displayed after \d+ms|not displayed after \d+ms|waitForDisplayed.*timeout|waitFor.*\d+ms|page\.waitForSelector|locator\.waitFor/i,
     category: 'timeout',
-    title: 'Timeout — El elemento o la navegación no respondió a tiempo',
-    fix: 'Revisar el selector, aumentar el timeout configurado o verificar que el elemento existe en el DOM. Considerar condiciones de red lentas.',
+    title: 'Timeout — El elemento no fue encontrado dentro del tiempo de espera',
+    fix: 'Revisar el selector UiSelector/XPath, verificar que el elemento existe en pantalla en ese momento del flujo y considerar aumentar el timeout si la app es lenta.',
   },
   {
     pattern: /strict mode violation|resolved to \d+ elements/i,
@@ -54,10 +55,10 @@ const FRAMEWORK_PATTERNS: Array<{
     fix: 'Usar un selector más específico o agregar .nth(0) para seleccionar el primer elemento.',
   },
   {
-    pattern: /locator.*not found|resolved to 0 elements|No element.*found|element not found/i,
+    pattern: /locator.*not found|resolved to 0 elements|No element.*found|element not found|element wasn't found|element was not found|Can't call.*element.*not found/i,
     category: 'element-not-found',
-    title: 'Element not found — El elemento no existe en la página',
-    fix: 'Verificar que el selector es correcto y que el elemento está presente en el DOM en el momento de la interacción.',
+    title: 'Element not found — El elemento no existe en pantalla',
+    fix: 'Verificar que el selector UiSelector/XPath es correcto y que el elemento está visible en la pantalla en el momento de la interacción.',
   },
   {
     pattern: /Target closed|page.*closed|browser.*disconnected/i,
@@ -85,7 +86,7 @@ const APPLICATION_PATTERNS: Array<{
   title: string;
 }> = [
   {
-    pattern: /toContainText|toHaveText|toContain\(/i,
+    pattern: /toContainText|toHaveText|toContain\(|Expected element to contain|but got ".+"/i,
     category: 'assertion-text',
     title: 'Assertion de texto — El texto en pantalla no coincide con el esperado',
   },
@@ -105,6 +106,11 @@ const APPLICATION_PATTERNS: Array<{
     title: 'Assertion de valor — El valor obtenido no coincide con el esperado',
   },
   {
+    pattern: /superó el SLA|exceeded.*SLA|SLA.*exceeded|tiempo de navegación.*superó|response time exceeded/i,
+    category: 'sla-violation',
+    title: 'Violación de SLA — El tiempo de respuesta superó el umbral aceptable',
+  },
+  {
     pattern: /expect\(|Expected.*\nReceived|AssertionError/i,
     category: 'assertion-generic',
     title: 'Assertion fallida — La condición de prueba no se cumplió',
@@ -122,13 +128,14 @@ function classifyError(errorMessage: string): {
       return { classification: 'framework', errorCategory: category, errorTitle: title, suggestedFix: fix };
     }
   }
+  const SLA_FIX = 'Revisar el rendimiento de la aplicación en el flujo afectado. Puede indicar una regresión de performance introducida por un cambio reciente en el backend o la UI.';
   for (const { pattern, category, title } of APPLICATION_PATTERNS) {
     if (pattern.test(errorMessage)) {
       return {
         classification: 'application',
         errorCategory: category,
         errorTitle: title,
-        suggestedFix: 'Defecto funcional — debe ser revisado por el equipo de desarrollo.',
+        suggestedFix: category === 'sla-violation' ? SLA_FIX : 'Defecto funcional — debe ser revisado por el equipo de desarrollo.',
       };
     }
   }

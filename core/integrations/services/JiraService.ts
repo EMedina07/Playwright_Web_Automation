@@ -135,7 +135,7 @@ export class JiraService {
   }
 
   async transitionToFailed(issueKey: string): Promise<void> {
-    await this.transitionTo(issueKey, ['Failed', 'Fallido', 'In Progress', 'En curso', 'To Do', 'Por hacer']);
+    await this.transitionTo(issueKey, ['Failed', 'Fallido', 'Bloqueado', 'Blocked', 'Por hacer', 'To Do']);
   }
 
   private async transitionTo(issueKey: string, preferredNames: string[]): Promise<void> {
@@ -217,7 +217,24 @@ export class JiraService {
   }
 
   async verifyConnection(): Promise<void> {
-    await getJson(this.client, '/myself');
+    try {
+      await getJson(this.client, '/myself');
+    } catch (err: unknown) {
+      const status = (err as any)?.response?.status;
+      if (status === 404) {
+        throw new Error(
+          `URL de Jira no encontrada (404). Verifica JIRA_BASE_URL en .env.qa — ` +
+          `debe ser "https://TU-WORKSPACE.atlassian.net" (sin barra final). ` +
+          `Valor actual: "${this.cfg.baseUrl}"`,
+        );
+      }
+      if (status === 401 || status === 403) {
+        throw new Error(
+          `Credenciales Jira inválidas (${status}). Verifica JIRA_EMAIL y JIRA_API_TOKEN en .env.qa.`,
+        );
+      }
+      throw err;
+    }
   }
 
   // ─── Failure analysis ───────────────────────────────────────────────────────
@@ -238,24 +255,53 @@ export class JiraService {
     testCaseKey: string,
     type: 'bug' | 'refactoring',
     rowLabel?: string,
-  ): Promise<JiraIssueRef | null> {
+  ): Promise<{ ref: JiraIssueRef; wasClosed: boolean } | null> {
     const linkedKeys = await this.getIssueLinks(testCaseKey);
     if (linkedKeys.length === 0) return null;
 
     const label = type === 'bug' ? 'qa-failure-bug' : 'qa-refactoring';
     const keyList = linkedKeys.map((k) => `"${k}"`).join(', ');
-    let jql = `key in (${keyList}) AND labels = "${label}" AND status not in (Done, Resuelto, Finalizada, Closed)`;
-    if (rowLabel) jql += ` AND labels = "${rowLabel}"`;
+    const rowFilter = rowLabel ? ` AND labels = "${rowLabel}"` : '';
+
+    // Búsqueda 1: bug/refactor abierto → recurrencia normal
     try {
-      const res = await postJson<{ issues: JiraIssueResponse[] }>(
-        this.client, '/search/jql', { jql, fields: ['summary'], maxResults: 1 },
+      const openJql = `key in (${keyList}) AND labels = "${label}" AND status not in (Done, Resuelto, Finalizada, Closed)${rowFilter}`;
+      const openRes = await postJson<{ issues: JiraIssueResponse[] }>(
+        this.client, '/search/jql', { jql: openJql, fields: ['summary'], maxResults: 1 },
       );
-      const issue = res.data.issues?.[0];
-      if (!issue) return null;
-      return { key: issue.key, id: issue.id, url: `${this.cfg.baseUrl}/browse/${issue.key}` };
+      const openIssue = openRes.data.issues?.[0];
+      if (openIssue) {
+        return {
+          ref: { key: openIssue.key, id: openIssue.id, url: `${this.cfg.baseUrl}/browse/${openIssue.key}` },
+          wasClosed: false,
+        };
+      }
     } catch {
       return null;
     }
+
+    // Búsqueda 2: bug/refactor cerrado → reabrir en vez de crear uno nuevo
+    try {
+      const closedJql = `key in (${keyList}) AND labels = "${label}"${rowFilter} ORDER BY updated DESC`;
+      const closedRes = await postJson<{ issues: JiraIssueResponse[] }>(
+        this.client, '/search/jql', { jql: closedJql, fields: ['summary', 'status'], maxResults: 1 },
+      );
+      const closedIssue = closedRes.data.issues?.[0];
+      if (closedIssue) {
+        return {
+          ref: { key: closedIssue.key, id: closedIssue.id, url: `${this.cfg.baseUrl}/browse/${closedIssue.key}` },
+          wasClosed: true,
+        };
+      }
+    } catch {
+      return null;
+    }
+
+    return null;
+  }
+
+  async reopenIssue(issueKey: string): Promise<void> {
+    await this.transitionTo(issueKey, ['In Progress', 'En curso', 'En Progreso', 'To Do', 'Por hacer', 'Open', 'Abierto', 'Reopen']);
   }
 
   async getIssueAssignee(issueKey: string): Promise<string | null> {
@@ -309,11 +355,15 @@ export class JiraService {
     const res = await postJson<JiraIssueResponse>(this.client, '/issue', payload);
     const ref: JiraIssueRef = { key: res.data.key, id: res.data.id, url: `${this.cfg.baseUrl}/browse/${res.data.key}` };
 
-    await postJson(this.client, '/issueLink', {
-      type: { name: 'Relates' },
-      inwardIssue: { key: ref.key },
-      outwardIssue: { key: testCaseKey },
-    });
+    try {
+      await postJson(this.client, '/issueLink', {
+        type: { name: 'Relates' },
+        inwardIssue: { key: ref.key },
+        outwardIssue: { key: testCaseKey },
+      });
+    } catch (linkErr: unknown) {
+      console.warn(`    ⚠️ No se pudo vincular ${ref.key} → ${testCaseKey}: ${(linkErr as any)?.message ?? linkErr}`);
+    }
 
     return ref;
   }
@@ -331,20 +381,26 @@ export class JiraService {
     const res = await postJson<JiraIssueResponse>(this.client, '/issue', payload);
     const ref: JiraIssueRef = { key: res.data.key, id: res.data.id, url: `${this.cfg.baseUrl}/browse/${res.data.key}` };
 
-    // Link bug → test case
-    await postJson(this.client, '/issueLink', {
-      type: { name: 'Relates' },
-      inwardIssue: { key: ref.key },
-      outwardIssue: { key: testCaseKey },
-    });
-
-    // Link bug → parent story (so the dev sees it from their story)
-    if (parentStoryKey) {
+    try {
       await postJson(this.client, '/issueLink', {
         type: { name: 'Relates' },
         inwardIssue: { key: ref.key },
-        outwardIssue: { key: parentStoryKey },
+        outwardIssue: { key: testCaseKey },
       });
+    } catch (linkErr: unknown) {
+      console.warn(`    ⚠️ No se pudo vincular ${ref.key} → ${testCaseKey}: ${(linkErr as any)?.message ?? linkErr}`);
+    }
+
+    if (parentStoryKey) {
+      try {
+        await postJson(this.client, '/issueLink', {
+          type: { name: 'Relates' },
+          inwardIssue: { key: ref.key },
+          outwardIssue: { key: parentStoryKey },
+        });
+      } catch (linkErr: unknown) {
+        console.warn(`    ⚠️ No se pudo vincular ${ref.key} → ${parentStoryKey}: ${(linkErr as any)?.message ?? linkErr}`);
+      }
     }
 
     return ref;
@@ -360,8 +416,23 @@ export class JiraService {
     await postJson(this.client, `/issue/${issueKey}/comment`, { body });
   }
 
+  private async deleteExistingPdfAttachments(issueKey: string): Promise<void> {
+    try {
+      const res = await getJson<{ fields: { attachment: Array<{ id: string; filename: string }> } }>(
+        this.client, `/issue/${issueKey}?fields=attachment`,
+      );
+      const pdfs = (res.data.fields.attachment ?? []).filter((a) => a.filename.endsWith('.pdf'));
+      for (const att of pdfs) {
+        try {
+          await this.client.delete(`/attachment/${att.id}`);
+        } catch {}
+      }
+    } catch {}
+  }
+
   async attachPdf(issueKey: string, pdfPath: string): Promise<void> {
     if (!fs.existsSync(pdfPath)) return;
+    await this.deleteExistingPdfAttachments(issueKey);
     const form = new FormData();
     const buffer = fs.readFileSync(pdfPath);
     form.append('file', buffer, { filename: path.basename(pdfPath), contentType: 'application/pdf' });

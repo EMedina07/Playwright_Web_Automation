@@ -110,6 +110,22 @@ async function handleRegressionScenario(
   }
 }
 
+function findRegressionSummaryPdf(): string | null {
+  const pdfDir = path.resolve(process.cwd(), 'reports', 'pdf');
+  if (!fs.existsSync(pdfDir)) return null;
+
+  // Only attach a PDF generated in this run (newer than the cucumber report).
+  const reportMtime = fs.existsSync(REPORT_PATH) ? fs.statSync(REPORT_PATH).mtimeMs : 0;
+
+  const files = fs.readdirSync(pdfDir)
+    .filter((f) => f.startsWith('regression-summary-') && f.endsWith('.pdf'))
+    .map((f) => ({ name: f, mtime: fs.statSync(path.join(pdfDir, f)).mtimeMs }))
+    .sort((a, b) => b.mtime - a.mtime);
+
+  const fresh = files.find((f) => f.mtime > reportMtime);
+  return fresh ? path.join(pdfDir, fresh.name) : null;
+}
+
 function findScenarioPdf(scenario: QACucumberResult): string | null {
   const featureName = path.basename(path.dirname(scenario.featureUri));
   const slug = scenario.scenarioName.replace(/\s+/g, '-').toLowerCase().slice(0, 60);
@@ -141,6 +157,7 @@ async function handleFailureAnalysis(
   scenario: QACucumberResult,
   issueKey: string,
   rowLabel?: string,
+  allowRefactoring = false,
 ): Promise<void> {
   const runDate = new Date().toISOString().slice(0, 10);
   const isAgentMode = process.env.QA_AGENT_MODE === 'true';
@@ -151,13 +168,20 @@ async function handleFailureAnalysis(
 
   try {
     const existingType = analysis.classification === 'framework' ? 'refactoring' : 'bug';
-    const existing = await jira.findLinkedFailureIssue(issueKey, existingType, rowLabel);
+    const existingResult = await jira.findLinkedFailureIssue(issueKey, existingType, rowLabel);
 
-    if (existing) {
+    if (existingResult) {
+      const { ref: existing, wasClosed } = existingResult;
+      if (wasClosed) {
+        await jira.reopenIssue(existing.key);
+        console.log(`    🔁 ${existing.key} reabierto — fallo recurrente tras cierre${rowTag}`);
+      }
       await jira.addFailureRecurrenceComment(existing.key, scenario, analysis, runDate);
       console.log(`    🔄 Recurrencia registrada en: ${existing.url}${rowTag}`);
     } else if (analysis.classification === 'framework' && isAgentMode) {
       console.log(`    🤖 [AGENT MODE] Fallo de framework detectado — el agente debe corregir el código y re-ejecutar.`);
+    } else if (analysis.classification === 'framework' && !allowRefactoring) {
+      console.log(`    ⏭ Fallo de framework en desarrollo activo — corregir directamente (sin tarea de refactorización)${rowTag}`);
     } else if (analysis.classification === 'framework') {
       const qaAccountId = await jira.getIssueAssignee(issueKey);
       if (qaAccountId) console.log(`    👤 Asignando refactorización al QA del caso: ${qaAccountId}`);
@@ -206,16 +230,21 @@ async function syncScenario(
     }
 
     if (existingKey) {
-      // Ya existe (en registry o recuperado de Jira) → actualizar como regresión
+      // Ya existe → retesting activo: bugs sí, refactoring no
       const result = await handleRegressionScenario(jira, scenario, existingKey, rowRegistryKey, cfg);
       if (scenario.status === 'failed' && result.action !== 'error') {
-        await handleFailureAnalysis(jira, scenario, existingKey, rowLabel);
+        const effectiveKey = result.issueKey ?? existingKey;
+        await handleFailureAnalysis(jira, scenario, effectiveKey, rowLabel, false);
       }
       return result;
     }
 
-    // Primera ejecución para esta fila → crear su propio test case
-    return handleNewScenario(jira, scenario, cfg, rowRegistryKey, rowLabel);
+    // Primera ejecución de esta fila → nuevo: bugs sí, refactoring no
+    const newRowResult = await handleNewScenario(jira, scenario, cfg, rowRegistryKey, rowLabel);
+    if (scenario.status === 'failed' && newRowResult.action !== 'error' && newRowResult.issueKey) {
+      await handleFailureAnalysis(jira, scenario, newRowResult.issueKey, rowLabel, false);
+    }
+    return newRowResult;
   }
 
   // ── Escenario regular (no es fila de outline) ─────────────────────────────
@@ -223,19 +252,21 @@ async function syncScenario(
   const jiraTagKey = extractJiraTag(scenario.tags);
   const existingKey = jiraTagKey ?? getIssueKey(scenario.scenarioId);
 
-  if (existingKey && isRegression) {
+  if (existingKey) {
     const result = await handleRegressionScenario(jira, scenario, existingKey, scenario.scenarioId, cfg);
     if (scenario.status === 'failed' && result.action !== 'error') {
-      await handleFailureAnalysis(jira, scenario, existingKey);
+      const effectiveKey = result.issueKey ?? existingKey;
+      await handleFailureAnalysis(jira, scenario, effectiveKey, undefined, isRegression);
     }
     return result;
   }
 
-  if (existingKey && !isRegression) {
-    return handleRegressionScenario(jira, scenario, existingKey, scenario.scenarioId, cfg);
+  // Nuevo escenario: bugs sí, refactoring no
+  const newResult = await handleNewScenario(jira, scenario, cfg, scenario.scenarioId);
+  if (scenario.status === 'failed' && newResult.action !== 'error' && newResult.issueKey) {
+    await handleFailureAnalysis(jira, scenario, newResult.issueKey, undefined, false);
   }
-
-  return handleNewScenario(jira, scenario, cfg, scenario.scenarioId);
+  return newResult;
 }
 
 async function main(): Promise<void> {
@@ -336,13 +367,33 @@ async function main(): Promise<void> {
     try {
       const runDate = new Date().toISOString().slice(0, 10);
       const executorName = cfg.executorName ?? 'QA Automation';
+      let summaryIssueKey: string | null = null;
       const existing = await jira.findRegressionSummaryIssue();
       if (existing) {
         await jira.updateRegressionSummaryIssue(existing.key, results, summary.scenarios, runDate, executorName);
+        summaryIssueKey = existing.key;
         console.log(`\n📊 Issue de resumen actualizado: ${existing.url}`);
       } else {
         const created = await jira.createRegressionSummaryIssue(results, summary.scenarios, runDate, executorName);
+        summaryIssueKey = created.key;
         console.log(`\n📊 Issue de resumen creado: ${created.url}`);
+      }
+
+      if (summaryIssueKey) {
+        const anyFailed = results.some((r) => r.status === 'failed');
+        if (anyFailed) {
+          await jira.transitionToFailed(summaryIssueKey);
+          console.log(`🔴 Regresión con fallos — issue marcado como fallido: ${summaryIssueKey}`);
+        } else {
+          await jira.transitionToDone(summaryIssueKey);
+          console.log(`🟢 Regresión exitosa — issue marcado como completado: ${summaryIssueKey}`);
+        }
+      }
+
+      const summaryPdfPath = findRegressionSummaryPdf();
+      if (summaryIssueKey && summaryPdfPath) {
+        await jira.attachPdf(summaryIssueKey, summaryPdfPath);
+        console.log(`📎 PDF de regresión adjuntado a: ${summaryIssueKey}`);
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
