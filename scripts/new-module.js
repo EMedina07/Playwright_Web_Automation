@@ -762,6 +762,23 @@ async function runWizard() {
     const type = await ask(`  type [${Object.keys(ACTION_CATALOG).join('/')}]: `);
     const a = { name, type };
     const cat = ACTION_CATALOG[type] || {};
+    if (type === 'composite') {
+      a.uses = [];
+      console.log('    Sub-acciones del composite (acciones ya creadas). Enter en "action" para terminar.');
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const ua = await ask('    use action (name de una acción ya creada): ');
+        if (!ua) break;
+        const use = { action: ua };
+        const field = await ask('    field (campo de data, o vacío si la acción no recibe valor): ');
+        if (field) use.field = field;
+        else {
+          const value = await ask('    value (valor fijo, o vacío): ');
+          if (value) use.value = value;
+        }
+        a.uses.push(use);
+      }
+    }
     if (cat.needsLocator) a.locator = await ask('  locator (name de un locator): ');
     if (cat.needsExpected) a.expected = await ask('  expected (texto esperado): ');
     if (cat.needsFragment) a.fragment = await ask('  fragment (parte de URL): ');
@@ -795,8 +812,13 @@ async function runWizard() {
     const title = await ask('  Scenario title: ');
     if (!title) break;
     const tagsIn = await ask('  tags (coma-separados, sin @): ');
-    const jira = await ask('  jira key (opcional, ej. KAN-210): ');
-    const sc = { title, tags: tagsIn.split(',').map((s) => s.trim()).filter(Boolean), jira: jira || '', steps: [] };
+    const sc = { title, tags: tagsIn.split(',').map((s) => s.trim()).filter(Boolean), jira: '', steps: [] };
+    const isOutline = (await ask('  ¿Scenario Outline (recorre la data)? [s/N]: ')).toLowerCase() === 's';
+    if (isOutline) {
+      sc.outline = true;
+      sc.examplesColumn = (await ask('  examplesColumn (campo de data para los Examples) [id]: ')) || 'id';
+      console.log('    En el text usa el placeholder "<' + sc.examplesColumn + '>" para el valor de cada fila.');
+    }
     console.log('    Steps. Enter en "text" para terminar el escenario.');
     // eslint-disable-next-line no-constant-condition
     while (true) {
