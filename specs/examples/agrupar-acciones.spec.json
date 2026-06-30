@@ -1,0 +1,48 @@
+{
+  "module": "LoginAgrupado",
+  "route": "/web/index.php/auth/login",
+  "description": "EJEMPLO COMPOSITE — agrupa varias acciones en UN solo step (usa 1 registro de datos)",
+  "envs": ["qa"],
+
+  "locators": [
+    { "name": "usernameInput", "by": "placeholder", "value": "Username" },
+    { "name": "passwordInput", "by": "placeholder", "value": "Password" },
+    { "name": "loginButton", "by": "role", "value": "button", "name_value": "Login" },
+    { "name": "sidebar", "by": "css", "value": ".oxd-main-menu" }
+  ],
+  "anchorLocator": "loginButton",
+
+  "actions": [
+    { "name": "fillUsername", "type": "fill", "locator": "usernameInput", "label": "campo Usuario" },
+    { "name": "fillPassword", "type": "fill", "locator": "passwordInput", "label": "campo Contraseña" },
+    { "name": "clickLogin", "type": "click", "locator": "loginButton", "label": "botón Login" },
+    {
+      "name": "iniciarSesion",
+      "type": "composite",
+      "label": "completa y envía el formulario de login",
+      "uses": [
+        { "action": "fillUsername", "field": "username" },
+        { "action": "fillPassword", "field": "password" },
+        { "action": "clickLogin" }
+      ]
+    },
+    { "name": "assertDashboard", "type": "assertUrlContains", "locator": "sidebar", "fragment": "/dashboard/index", "label": "verifica redirección al dashboard" }
+  ],
+
+  "data": [
+    { "id": "valido", "username": "Admin", "password": "admin123" }
+  ],
+
+  "scenarios": [
+    {
+      "title": "Login completo en un solo paso con datos válidos",
+      "tags": ["Regresion", "Smoke"],
+      "jira": "",
+      "steps": [
+        { "kw": "Given", "text": "el usuario abre el formulario de login", "bind": "navigate" },
+        { "kw": "When", "text": "inicia sesión con el registro \"valido\"", "bind": "iniciarSesion" },
+        { "kw": "Then", "text": "el usuario llega al dashboard", "bind": "assertDashboard" }
+      ]
+    }
+  ]
+}

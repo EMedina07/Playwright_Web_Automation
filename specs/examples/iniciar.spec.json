@@ -1,0 +1,40 @@
+{
+  "module": "Login",
+  "route": "/web/index.php/auth/login",
+  "description": "EJEMPLO BÁSICO — login paso a paso (acciones atómicas + datos)",
+  "envs": ["qa"],
+
+  "locators": [
+    { "name": "usernameInput", "by": "placeholder", "value": "Username" },
+    { "name": "passwordInput", "by": "placeholder", "value": "Password" },
+    { "name": "loginButton", "by": "role", "value": "button", "name_value": "Login" },
+    { "name": "sidebar", "by": "css", "value": ".oxd-main-menu" }
+  ],
+  "anchorLocator": "loginButton",
+
+  "actions": [
+    { "name": "fillUsername", "type": "fill", "locator": "usernameInput", "label": "campo Usuario" },
+    { "name": "fillPassword", "type": "fill", "locator": "passwordInput", "label": "campo Contraseña" },
+    { "name": "clickLogin", "type": "click", "locator": "loginButton", "label": "botón Login" },
+    { "name": "assertDashboard", "type": "assertUrlContains", "locator": "sidebar", "fragment": "/dashboard/index", "label": "verifica redirección al dashboard" }
+  ],
+
+  "data": [
+    { "id": "valido", "username": "Admin", "password": "admin123" }
+  ],
+
+  "scenarios": [
+    {
+      "title": "Login exitoso con credenciales válidas",
+      "tags": ["Regresion", "Smoke"],
+      "jira": "",
+      "steps": [
+        { "kw": "Given", "text": "el usuario está en la página de login", "bind": "navigate" },
+        { "kw": "When", "text": "ingresa el usuario del registro \"valido\"", "bind": "fillUsername", "dataId": "username" },
+        { "kw": "And", "text": "ingresa la contraseña del registro \"valido\"", "bind": "fillPassword", "dataId": "password" },
+        { "kw": "And", "text": "hace clic en iniciar sesión", "bind": "clickLogin" },
+        { "kw": "Then", "text": "el usuario es redirigido al dashboard", "bind": "assertDashboard" }
+      ]
+    }
+  ]
+}

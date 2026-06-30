@@ -25,6 +25,9 @@
   },
   "scripts": {
     "test": "cucumber-js",
+    "new:module": "node scripts/new-module.js",
+    "manual": "node scripts/generate-manual.cjs",
+    "manual:gen": "node scripts/generate-generator-manual.cjs",
     "test:qa": "node scripts/run-tests.js qa",
     "test:qa:video": "node scripts/run-tests.js qa RECORD_VIDEO=true",
     "test:qa:video:report": "node scripts/run-tests.js qa RECORD_VIDEO=true",

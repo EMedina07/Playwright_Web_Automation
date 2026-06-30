@@ -1,0 +1,51 @@
+{
+  "module": "Campanias",
+  "route": "/web/index.php/campaign/list",
+  "description": "Gestión de campañas del contact center",
+  "envs": ["qa"],
+
+  "locators": [
+    { "name": "searchInput", "by": "placeholder", "value": "Search" },
+    { "name": "addButton", "by": "role", "value": "button", "name_value": "Add" },
+    { "name": "campaignName", "by": "label", "value": "Campaign Name" },
+    { "name": "resultsTable", "by": "css", "value": ".oxd-table" },
+    { "name": "successToast", "by": "css", "value": ".oxd-toast" }
+  ],
+  "anchorLocator": "addButton",
+
+  "actions": [
+    { "name": "search", "type": "fill", "locator": "searchInput", "label": "campo de búsqueda" },
+    { "name": "clickAdd", "type": "click", "locator": "addButton", "label": "botón Add" },
+    { "name": "fillName", "type": "fill", "locator": "campaignName", "label": "nombre de campaña" },
+    { "name": "assertSaved", "type": "assertText", "locator": "successToast", "expected": "Successfully Saved", "label": "verifica toast de guardado" }
+  ],
+
+  "data": [
+    { "id": "happy-001", "name": "Campaña Black Friday" },
+    { "id": "happy-002", "name": "Campaña Cyber Monday" }
+  ],
+
+  "scenarios": [
+    {
+      "title": "Crear una campaña con datos válidos",
+      "tags": ["Regresion"],
+      "jira": "",
+      "steps": [
+        { "kw": "Given", "text": "el usuario está en la página de campañas", "bind": "navigate" },
+        { "kw": "When", "text": "hace clic en agregar campaña", "bind": "clickAdd" },
+        { "kw": "And", "text": "ingresa el nombre de la campaña \"happy-001\"", "bind": "fillName", "dataId": "name" },
+        { "kw": "Then", "text": "se muestra el mensaje de campaña guardada", "bind": "assertSaved" }
+      ]
+    },
+    {
+      "title": "Buscar una campaña existente",
+      "tags": ["Regresion"],
+      "jira": "",
+      "steps": [
+        { "kw": "Given", "text": "el usuario está en la página de campañas", "bind": "navigate" },
+        { "kw": "When", "text": "busca la campaña \"happy-002\"", "bind": "search", "dataId": "name" },
+        { "kw": "Then", "text": "se listan los resultados de la búsqueda" }
+      ]
+    }
+  ]
+}

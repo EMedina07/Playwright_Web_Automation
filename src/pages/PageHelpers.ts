@@ -109,6 +109,22 @@ export abstract class PageHelpers extends BasePage {
   }
 
 
+  // Verifica que un elemento esté visible. Usa .first() para tolerar selectores
+  // que matchean varios elementos (genérico, sirve en cualquier proyecto).
+  protected async assertVisible(
+    locator: Locator,
+    description: string,
+    timeout = 10_000,
+  ): Promise<void> {
+    await this.assertCapture(
+      description,
+      `expect(locator).toBeVisible()`,
+      async () => {
+        await expect(locator.first()).toBeVisible({ timeout });
+      },
+    );
+  }
+
   protected async assertAllTextsEqual(
     locator: Locator,
     expectedText: string,

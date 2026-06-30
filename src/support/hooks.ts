@@ -29,7 +29,10 @@ BeforeAll(function () {
   fs.mkdirSync(path.join('test-results', 'videos'), { recursive: true });
 });
 
-Before(async function (this: CustomWorld, scenario) {
+// Timeout amplio para los hooks: el arranque del navegador y la generación de
+// evidencia (PDF/trace/video) pueden tardar más que un step normal, sobre todo en
+// ejecución paralela. Es independiente del timeout de los steps (genérico).
+Before({ timeout: 120_000 }, async function (this: CustomWorld, scenario) {
   const featureName = extractFeatureName(scenario.pickle.uri);
   const videoDir = path.join('test-results', 'videos', featureName);
 
@@ -72,7 +75,7 @@ AfterStep(async function (this: CustomWorld, { pickleStep, result }) {
   }
 });
 
-After(async function (this: CustomWorld, scenario) {
+After({ timeout: 120_000 }, async function (this: CustomWorld, scenario) {
   const failed = scenario.result?.status === 'FAILED';
   const willBeRetried = (scenario.result as { willBeRetried?: boolean })?.willBeRetried ?? false;
   const scenarioSlug = scenario.pickle.name.replace(/\s+/g, '-').toLowerCase();
