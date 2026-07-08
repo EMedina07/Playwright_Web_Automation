@@ -1,6 +1,7 @@
 import report from 'multiple-cucumber-html-reporter';
 import { execSync } from 'child_process';
 import path from 'path';
+import fs from 'fs';
 
 report.generate({
   jsonDir: 'reports',
@@ -30,6 +31,19 @@ report.generate({
     ],
   },
 });
+
+// Red de seguridad: en algunos entornos (p. ej. carpetas sincronizadas por OneDrive)
+// el reporter no logra copiar sus assets (jQuery/Bootstrap/DataTables) y el HTML queda
+// sin estilos ni scripts — los escenarios, casos y evidencias no se ven. Los copiamos
+// nosotros para garantizar un reporte funcional. Genérico y reaplicable a cualquier equipo.
+try {
+  const pkgRoot = path.dirname(require.resolve('multiple-cucumber-html-reporter/package.json'));
+  const assetsSrc = path.join(pkgRoot, 'templates', 'assets');
+  const assetsDest = path.resolve('reports', 'html', 'assets');
+  fs.cpSync(assetsSrc, assetsDest, { recursive: true });
+} catch (e) {
+  console.warn('Aviso: no se pudieron copiar los assets del reporte:', (e as Error).message);
+}
 
 const reportPath = path.resolve('reports', 'html', 'index.html');
 console.log(`\nReporte generado: ${reportPath}`);
