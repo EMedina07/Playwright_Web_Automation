@@ -1,0 +1,25 @@
+/* Tema de ejemplo para el reporte HTML (se inyecta con customStyle en report.ts).
+   Edítalo a gusto o elimínalo quitando la línea customStyle. Es CSS estándar. */
+
+:root {
+  --brand: #4f46e5;   /* color de acento (indigo) */
+  --brand-dark: #3730a3;
+}
+
+/* Banda superior de marca en todas las páginas del reporte */
+body::before {
+  content: "QA Automation — Playwright + Cucumber";
+  display: block;
+  background: linear-gradient(90deg, var(--brand), var(--brand-dark));
+  color: #fff;
+  font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .3px;
+  text-align: center;
+  padding: 6px 0;
+}
+
+/* Acentos de color en enlaces y títulos (selectores amplios y seguros) */
+a { color: var(--brand); }
+.panel-heading, .page-title, .x_title { border-color: var(--brand) !important; }

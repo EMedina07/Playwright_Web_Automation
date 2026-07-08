@@ -14,6 +14,10 @@ report.generate({
   reportName: 'Cucumber Report',
   pageTitle: 'Resultados de pruebas',
   displayDuration: true,
+  // Look & feel del reporte (opcionales, editables o eliminables):
+  // customStyle inyecta un CSS propio a todas las páginas; pageFooter agrega un pie de página.
+  customStyle: path.resolve('core', 'reports', 'report-theme.css'),
+  pageFooter: fs.readFileSync(path.resolve('core', 'reports', 'report-footer.html'), 'utf8'),
   metadata: {
     browser: {
       name: 'chrome',
