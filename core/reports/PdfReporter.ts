@@ -9,6 +9,7 @@ export interface ScenarioInfo {
   status: 'passed' | 'failed';
   tags: string[];
   environment?: string;
+  rowLabel?: string; // sufijo para filas de Scenario Outline (ej. el id del registro)
 }
 
 const BADGE_COLORS: Record<string, string> = {
@@ -29,9 +30,11 @@ const PASS_COLOR = '#10b981';
 function buildOutPath(scenario: ScenarioInfo, slug: string): string {
   const dir = path.resolve(process.cwd(), 'reports', 'pdf', scenario.featureName);
   fs.mkdirSync(dir, { recursive: true });
-  const ts = new Date().toISOString().slice(0, 19).replace('T', '_').replace(/:/g, '-');
-  const status = scenario.status === 'passed' ? 'PASSED' : 'FAILED';
-  return path.join(dir, `${slug}_${status}_${ts}.pdf`);
+  // Nombre ESTABLE (sin timestamp ni status): la corrida actual reemplaza la anterior,
+  // así no se acumulan PDFs. El sufijo de fila mantiene un PDF por cada fila de un
+  // Scenario Outline sin que se pisen entre sí. El estado passed/failed va dentro del PDF.
+  const suffix = scenario.rowLabel ? `-${scenario.rowLabel}` : '';
+  return path.join(dir, `${slug}${suffix}.pdf`);
 }
 
 function drawHeaderBar(

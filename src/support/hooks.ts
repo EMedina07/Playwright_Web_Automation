@@ -15,6 +15,17 @@ function extractFeatureName(uri: string): string {
   return path.basename(path.dirname(uri));
 }
 
+// Deriva un sufijo estable para el PDF a partir del primer valor entre comillas del
+// escenario (típicamente el id del registro). Sirve para que cada fila de un Scenario
+// Outline tenga su propio PDF sin pisarse, y se mantenga estable entre corridas.
+function extractRowLabel(steps: ReadonlyArray<{ text: string }>): string | undefined {
+  for (const step of steps) {
+    const match = step.text.match(/"([^"]+)"/);
+    if (match) return match[1].replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase().slice(0, 40);
+  }
+  return undefined;
+}
+
 function buildVideoName(scenarioSlug: string, status: 'PASSED' | 'FAILED'): string {
   const date = new Date()
     .toISOString()
@@ -92,6 +103,7 @@ After({ timeout: 120_000 }, async function (this: CustomWorld, scenario) {
           featureName,
           status: failed ? 'failed' : 'passed',
           tags: scenario.pickle.tags.map((t) => t.name),
+          rowLabel: extractRowLabel(scenario.pickle.steps),
         },
         this.stepRecords,
       );
