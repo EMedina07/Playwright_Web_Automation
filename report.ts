@@ -3,6 +3,11 @@ import { execSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 
+// Limpia la salida HTML anterior para regenerar fresco cada corrida: evita archivos
+// acumulados de ejecuciones previas y garantiza que los assets se copien desde cero.
+// No toca el JSON (reports/cucumber-report.json) ni cambia cómo se presentan las evidencias.
+fs.rmSync(path.resolve('reports', 'html'), { recursive: true, force: true });
+
 report.generate({
   jsonDir: 'reports',
   reportPath: 'reports/html',
