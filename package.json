@@ -39,6 +39,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "analisis:reporte": "node scripts/generate-report-analysis.cjs"
   }
 }
