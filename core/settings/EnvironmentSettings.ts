@@ -1,7 +1,7 @@
 import dotenv from 'dotenv';
 import path from 'path';
 
-const VALID_ENVIRONMENTS = ['qa', 'cert'] as const;
+const VALID_ENVIRONMENTS = ['qa', 'cert', 'local'] as const;
 type SupportedEnvironment = (typeof VALID_ENVIRONMENTS)[number];
 
 const rawEnv = process.env.ENV ?? 'qa';
@@ -24,4 +24,8 @@ if (!baseURL) {
   );
 }
 
-export default { env, baseURL };
+// URL del portal de comercios (app distinta del back-office). Si no se define,
+// cae al back-office por compatibilidad.
+const portalURL = process.env.PORTAL_URL ?? baseURL;
+
+export default { env, baseURL, portalURL };

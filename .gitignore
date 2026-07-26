@@ -13,3 +13,9 @@ node_modules/
 /playwright/.auth/
 /reports/
 /allure-report/
+
+# Datos de prueba por-entorno (pueden traer credenciales) — no se versionan
+jsonData/local/
+
+# Reportes generados (evidencia de corridas) — no se versionan
+reports/
