@@ -1,6 +1,6 @@
 /**
  * Datos de prueba del login del back-office de PriceList.
- * A diferencia de OrangeHRM (username), aquí la credencial es un email.
+ * La credencial es un email (no un username).
  */
 export interface BackofficeLoginData {
   id: string;
