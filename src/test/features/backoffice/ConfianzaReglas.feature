@@ -150,3 +150,15 @@ Feature: Confianza de comercios — reglas de suspensión, casos negativos y edg
     And el comercio queda suspendido por el admin
     When un consumidor reporta al comercio suspendido
     Then el reporte se rechaza
+
+  @Regresion @bug
+  Scenario: [BUG-4] Cinco cuentas desde el MISMO dispositivo no suspenden
+    Given un comercio de prueba activo y publicado
+    When 5 consumidores distintos reportan "no coincidió" desde el mismo dispositivo
+    Then el comercio sigue activo
+
+  @Regresion @bug
+  Scenario: [BUG-5] Pagar menos que lo publicado no cuenta contra el comercio
+    Given un comercio de prueba activo y publicado
+    When un consumidor reporta "no coincidió" pagando menos que lo publicado
+    Then el reporte no queda registrado

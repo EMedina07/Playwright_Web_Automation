@@ -151,17 +151,26 @@ export async function deleteConsumer(token: string): Promise<void> {
   await raw('/api/consumers/me', { method: 'DELETE', token });
 }
 
-export async function report(token: string, vendorId: number, productId: number, opts: { matched?: boolean; seenPrice?: number; comment?: string } = {}): Promise<{ registered: boolean; vendorSuspended: boolean }> {
-  return post('/api/reports/price-check', { vendorId, productId, matched: opts.matched ?? false, seenPrice: opts.seenPrice ?? 130, comment: opts.comment }, token);
+// NB reglas de confianza vigentes:
+//  · Un "no coincidió" solo CUENTA si el precio pagado SUPERA el publicado —
+//    por eso el default es alto (el comercio QA publica al precio típico).
+//  · La suspensión exige ≥3 DISPOSITIVOS distintos: cada reporte lleva deviceId
+//    (default: uno por consumidor/token, simulando el celular de cada persona).
+export const HIGH_SEEN_PRICE = 900_000;
+
+export async function report(token: string, vendorId: number, productId: number, opts: { matched?: boolean; seenPrice?: number; comment?: string; deviceId?: string } = {}): Promise<{ registered: boolean; vendorSuspended: boolean }> {
+  const deviceId = opts.deviceId ?? `qa-device-${token.slice(-24)}`;
+  return post('/api/reports/price-check', { vendorId, productId, matched: opts.matched ?? false, seenPrice: opts.seenPrice ?? HIGH_SEEN_PRICE, comment: opts.comment, deviceId }, token);
 }
 
-// Genera `n` reportes de "no coincidió" de `n` consumidores distintos sobre el
-// producto del comercio. Devuelve si quedó suspendido al último.
-export async function reportFromDistinctConsumers(v: QaVendor, n: number, startPrice = 120): Promise<boolean> {
+// Genera `n` reportes de "no coincidió" de `n` consumidores distintos (cada uno
+// desde su propio dispositivo) sobre el producto del comercio. Devuelve si
+// quedó suspendido al último.
+export async function reportFromDistinctConsumers(v: QaVendor, n: number, startPrice = HIGH_SEEN_PRICE - 100): Promise<boolean> {
   let suspended = false;
   for (let i = 0; i < n; i++) {
     const c = await registerConsumer();
-    const r = await report(c.token, v.vendorId, v.productId, { seenPrice: startPrice + i });
+    const r = await report(c.token, v.vendorId, v.productId, { seenPrice: startPrice + i, deviceId: `qa-device-${c.phone}` });
     suspended = r.vendorSuspended;
   }
   return suspended;

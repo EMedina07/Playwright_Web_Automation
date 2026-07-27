@@ -36,7 +36,7 @@ When('2 consumidores reportan {string} en todos los productos publicados', { tim
   let n = 0;
   for (const pid of ids) {
     for (const c of [c1, c2]) {
-      const r = await report(c.token, s.vendor!.vendorId, pid, { seenPrice: 500 }).catch(() => ({ registered: false }));
+      const r = await report(c.token, s.vendor!.vendorId, pid, { seenPrice: 890500 }).catch(() => ({ registered: false }));
       if ((r as any).registered) n++;
     }
   }
@@ -47,7 +47,7 @@ When('2 consumidores reportan 5 productos distintos cada uno', { timeout: 40_000
   const s = this as CustomWorld & RState;
   const ids = [s.vendor!.productId, ...EXTRA_PRODUCTS.map(([id]) => id)].slice(0, 5);
   const c1 = await registerConsumer(); const c2 = await registerConsumer();
-  for (const pid of ids) for (const c of [c1, c2]) await report(c.token, s.vendor!.vendorId, pid, { seenPrice: 500 }).catch(() => undefined);
+  for (const pid of ids) for (const c of [c1, c2]) await report(c.token, s.vendor!.vendorId, pid, { seenPrice: 890500 }).catch(() => undefined);
 });
 
 When('{int} consumidores distintos reportan {string}', { timeout: 40_000 }, async function (this: CustomWorld, count: number, label: string) {
@@ -55,7 +55,7 @@ When('{int} consumidores distintos reportan {string}', { timeout: 40_000 }, asyn
   const matched = label.includes('sí');
   for (let i = 0; i < count; i++) {
     const c = await registerConsumer();
-    await report(c.token, s.vendor!.vendorId, s.vendor!.productId, { matched, seenPrice: 150 + i });
+    await report(c.token, s.vendor!.vendorId, s.vendor!.productId, { matched, seenPrice: 890150 + i });
   }
 });
 
@@ -64,7 +64,7 @@ Given('un consumidor reporta y luego elimina su cuenta', { timeout: 30_000 }, as
   const phone = `+1829${String(Date.now()).slice(-7)}`;
   const c = await registerConsumer(phone);
   s.firstConsumer = c;
-  const r = await report(c.token, s.vendor!.vendorId, s.vendor!.productId, { seenPrice: 200 });
+  const r = await report(c.token, s.vendor!.vendorId, s.vendor!.productId, { seenPrice: 890200 });
   assert.ok(r.registered, 'El primer reporte debía registrarse.');
   await deleteConsumer(c.token);
 });
@@ -72,7 +72,7 @@ Given('un consumidor reporta y luego elimina su cuenta', { timeout: 30_000 }, as
 When('re-crea la cuenta con el mismo teléfono y vuelve a reportar el mismo producto', { timeout: 30_000 }, async function (this: CustomWorld) {
   const s = this as CustomWorld & RState;
   const c2 = await registerConsumer(s.firstConsumer!.phone);
-  const r2 = await report(c2.token, s.vendor!.vendorId, s.vendor!.productId, { seenPrice: 210 });
+  const r2 = await report(c2.token, s.vendor!.vendorId, s.vendor!.productId, { seenPrice: 890210 });
   s.registered = r2.registered ? 1 : 0;
 });
 
@@ -136,13 +136,13 @@ Given('un consumidor reporta que el precio {string}', async function (this: Cust
   const c = await registerConsumer();
   s.firstConsumer = c;
   const matched = label.includes('sí');
-  await report(c.token, s.vendor!.vendorId, s.vendor!.productId, { matched, seenPrice: 120 });
+  await report(c.token, s.vendor!.vendorId, s.vendor!.productId, { matched, seenPrice: 890120 });
 });
 
 When('el mismo consumidor reporta que el precio {string} el mismo día', async function (this: CustomWorld, label: string) {
   const s = this as CustomWorld & RState;
   const matched = label.includes('sí');
-  const r = await report(s.firstConsumer!.token, s.vendor!.vendorId, s.vendor!.productId, { matched, seenPrice: 130 });
+  const r = await report(s.firstConsumer!.token, s.vendor!.vendorId, s.vendor!.productId, { matched, seenPrice: 890130 });
   s.registered = r.registered ? 1 : 0;
 });
 
@@ -219,11 +219,11 @@ When('3 consumidores distintos generan 5 reportes de "no coincidió"', { timeout
   const s = this as CustomWorld & RState;
   const ids = [s.vendor!.productId, ...EXTRA_PRODUCTS.map(([id]) => id)];
   const c1 = await registerConsumer(); const c2 = await registerConsumer(); const c3 = await registerConsumer();
-  await report(c1.token, s.vendor!.vendorId, ids[0], { seenPrice: 500 });
-  await report(c1.token, s.vendor!.vendorId, ids[1], { seenPrice: 501 });
-  await report(c1.token, s.vendor!.vendorId, ids[2], { seenPrice: 502 });
-  await report(c2.token, s.vendor!.vendorId, ids[0], { seenPrice: 503 });
-  await report(c3.token, s.vendor!.vendorId, ids[0], { seenPrice: 504 });
+  await report(c1.token, s.vendor!.vendorId, ids[0], { seenPrice: 890500 });
+  await report(c1.token, s.vendor!.vendorId, ids[1], { seenPrice: 890501 });
+  await report(c1.token, s.vendor!.vendorId, ids[2], { seenPrice: 890502 });
+  await report(c2.token, s.vendor!.vendorId, ids[0], { seenPrice: 890503 });
+  await report(c3.token, s.vendor!.vendorId, ids[0], { seenPrice: 890504 });
 });
 
 When('el admin intenta suspender al comercio de nuevo', async function (this: CustomWorld) {
@@ -253,4 +253,30 @@ When('un consumidor reporta al comercio suspendido', async function (this: Custo
 Then('el reporte se acepta', function (this: CustomWorld) {
   const s = this as CustomWorld & RState;
   assert.ok(s.lastRaw && s.lastRaw.ok, `El reporte debía aceptarse; recibí HTTP ${s.lastRaw?.status} ("${s.lastRaw?.title ?? ''}").`);
+});
+
+// ── Regresiones BUG-4 (dispositivos) y BUG-5 (precio menor) ──────────────────
+
+// 5 cuentas distintas pero UN solo dispositivo: sin ≥3 dispositivos distintos
+// el comercio no se suspende, aunque haya 5 reportes de 5 consumidores.
+When('5 consumidores distintos reportan {string} desde el mismo dispositivo', { timeout: 40_000 }, async function (this: CustomWorld, _label: string) {
+  const s = this as CustomWorld & RState;
+  for (let i = 0; i < 5; i++) {
+    const c = await registerConsumer();
+    await report(c.token, s.vendor!.vendorId, s.vendor!.productId, { seenPrice: 890300 + i, deviceId: 'qa-device-COMPARTIDO' });
+  }
+});
+
+// Pagar MENOS que lo publicado no perjudica al consumidor: el "no coincidió"
+// no se registra ni cuenta para la suspensión.
+When('un consumidor reporta {string} pagando menos que lo publicado', { timeout: 30_000 }, async function (this: CustomWorld, _label: string) {
+  const s = this as CustomWorld & RState;
+  const c = await registerConsumer();
+  const r = await report(c.token, s.vendor!.vendorId, s.vendor!.productId, { seenPrice: 1 });
+  s.registered = r.registered ? 1 : 0;
+});
+
+Then('el reporte no queda registrado', function (this: CustomWorld) {
+  assert.strictEqual((this as CustomWorld & RState).registered, 0,
+    'Un "no coincidió" pagando MENOS que lo publicado no debía registrarse.');
 });
