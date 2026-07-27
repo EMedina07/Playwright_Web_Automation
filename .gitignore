@@ -19,3 +19,7 @@ jsonData/local/
 
 # Reportes generados (evidencia de corridas) — no se versionan
 reports/
+
+# macOS
+.DS_Store
+**/.DS_Store
