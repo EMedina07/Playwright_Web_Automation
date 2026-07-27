@@ -93,18 +93,60 @@ Feature: Confianza de comercios — reglas de suspensión, casos negativos y edg
     When el admin intenta suspender un comercio inexistente
     Then la moderación se rechaza
 
-  # ── Defectos detectados (quedan en rojo) ──────────────────────────────────
+  # ── Más casos negativos / edge (destapan defectos) ────────────────────────
 
-  @bug @defecto
-  Scenario: [BUG-1] Un comercio suspendido NO debería subir precios por su API key
+  @Regresion
+  Scenario: Cinco reportes de exactamente 3 consumidores distintos suspenden
+    Given un comercio de prueba activo y publicado
+    And el comercio publica 8 productos más
+    When 3 consumidores distintos generan 5 reportes de "no coincidió"
+    Then el comercio queda suspendido
+
+  @Regresion
+  Scenario: Suspender un comercio ya suspendido se rechaza
+    Given un comercio de prueba activo y publicado
+    And el comercio queda suspendido por el admin
+    When el admin intenta suspender al comercio de nuevo
+    Then la moderación se rechaza
+
+  @Regresion
+  Scenario: Reactivar reinicia el ciclo — los reportes previos ya no cuentan
+    Given un comercio de prueba activo y publicado
+    And el comercio se auto-suspende por 5 reportes de 3 consumidores distintos
+    When el admin reactiva al comercio
+    And 4 consumidores distintos reportan "no coincidió"
+    Then el comercio sigue activo
+
+  @Regresion
+  Scenario Outline: Un precio visto en el límite válido se acepta (<caso>)
+    Given un comercio de prueba activo y publicado
+    When un consumidor reporta con precio visto válido <precio>
+    Then el reporte se acepta
+
+    Examples:
+      | caso     | precio |
+      | mínimo   | 1      |
+      | máximo   | 999999 |
+
+  # ── Regresiones de defectos ya corregidos (antes en rojo, ahora en verde) ──
+
+  @Regresion @bug
+  Scenario: [BUG-1] Un comercio suspendido no puede subir precios por su API key
     Given un comercio de prueba activo y publicado
     And el comercio queda suspendido por el admin
     When el comercio intenta subir precios por su API key en el Canal A
     Then el canal de ingesta debería rechazar el lote del comercio suspendido
 
-  @bug @defecto
-  Scenario: [BUG-2] Un "coincidió" NO debería tapar un "no coincidió" del mismo día
+  @Regresion @bug
+  Scenario: [BUG-2] Un "coincidió" no tapa un "no coincidió" del mismo día
     Given un comercio de prueba activo y publicado
     And un consumidor reporta que el precio "sí coincidió"
     When el mismo consumidor reporta que el precio "no coincidió" el mismo día
     Then el reporte de "no coincidió" debería quedar registrado
+
+  @Regresion @bug
+  Scenario: [BUG-3] Un comercio suspendido no puede recibir reportes de caja
+    Given un comercio de prueba activo y publicado
+    And el comercio queda suspendido por el admin
+    When un consumidor reporta al comercio suspendido
+    Then el reporte se rechaza

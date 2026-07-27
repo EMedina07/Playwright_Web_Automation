@@ -200,13 +200,57 @@ Then('la moderación se rechaza', function (this: CustomWorld) {
 });
 
 Then('el canal de ingesta debería rechazar el lote del comercio suspendido', function (this: CustomWorld) {
-  // DEFECTO: hoy el lote se ACEPTA (el filtro de API key no mira el estado del comercio).
+  // BUG-1 CORREGIDO: el filtro de API key ahora valida el estado del comercio.
   assert.strictEqual((this as any).ingestAccepted, false,
-    'DEFECTO BUG-1: un comercio suspendido pudo subir precios por su API key (el lote fue aceptado).');
+    'BUG-1: un comercio suspendido no debería poder subir precios por su API key.');
 });
 
 Then('el reporte de "no coincidió" debería quedar registrado', function (this: CustomWorld) {
-  // DEFECTO: el dedupe no distingue matched; un "coincidió" tapa el "no coincidió" del día.
+  // BUG-2 CORREGIDO: el dedupe ahora distingue el veredicto.
   assert.strictEqual((this as CustomWorld & RState).registered, 1,
-    'DEFECTO BUG-2: el "no coincidió" no se registró porque un "coincidió" del mismo día lo bloqueó.');
+    'BUG-2: el "no coincidió" debe registrarse aunque haya un "coincidió" del mismo día.');
+});
+
+// ── Casos edge/negativos nuevos ───────────────────────────────────────────────
+
+// 5 reportes de EXACTAMENTE 3 consumidores distintos (c1 en 3 productos, c2 y c3
+// en 1 cada uno) → cruza el umbral (≥5 reportes Y ≥3 consumidores).
+When('3 consumidores distintos generan 5 reportes de "no coincidió"', { timeout: 40_000 }, async function (this: CustomWorld) {
+  const s = this as CustomWorld & RState;
+  const ids = [s.vendor!.productId, ...EXTRA_PRODUCTS.map(([id]) => id)];
+  const c1 = await registerConsumer(); const c2 = await registerConsumer(); const c3 = await registerConsumer();
+  await report(c1.token, s.vendor!.vendorId, ids[0], { seenPrice: 500 });
+  await report(c1.token, s.vendor!.vendorId, ids[1], { seenPrice: 501 });
+  await report(c1.token, s.vendor!.vendorId, ids[2], { seenPrice: 502 });
+  await report(c2.token, s.vendor!.vendorId, ids[0], { seenPrice: 503 });
+  await report(c3.token, s.vendor!.vendorId, ids[0], { seenPrice: 504 });
+});
+
+When('el admin intenta suspender al comercio de nuevo', async function (this: CustomWorld) {
+  const s = this as CustomWorld & RState;
+  const token = await getAdminToken();
+  s.lastRaw = await moderate(token, s.vendor!.vendorId, 'suspend', 'QA doble suspensión');
+});
+
+When('el admin reactiva al comercio', { timeout: 20_000 }, async function (this: CustomWorld) {
+  const s = this as CustomWorld & RState;
+  const token = await getAdminToken();
+  await moderate(token, s.vendor!.vendorId, 'activate', 'QA reactivación de ciclo');
+});
+
+When('un consumidor reporta con precio visto válido {int}', async function (this: CustomWorld, precio: number) {
+  const s = this as CustomWorld & RState;
+  const c = await registerConsumer();
+  s.lastRaw = await raw('/api/reports/price-check', { method: 'POST', token: c.token, body: { vendorId: s.vendor!.vendorId, productId: s.vendor!.productId, matched: false, seenPrice: precio } });
+});
+
+When('un consumidor reporta al comercio suspendido', async function (this: CustomWorld) {
+  const s = this as CustomWorld & RState;
+  const c = await registerConsumer();
+  s.lastRaw = await raw('/api/reports/price-check', { method: 'POST', token: c.token, body: { vendorId: s.vendor!.vendorId, productId: s.vendor!.productId, matched: false, seenPrice: 130 } });
+});
+
+Then('el reporte se acepta', function (this: CustomWorld) {
+  const s = this as CustomWorld & RState;
+  assert.ok(s.lastRaw && s.lastRaw.ok, `El reporte debía aceptarse; recibí HTTP ${s.lastRaw?.status} ("${s.lastRaw?.title ?? ''}").`);
 });
