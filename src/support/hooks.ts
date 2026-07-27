@@ -44,6 +44,15 @@ BeforeAll(function () {
 // evidencia (PDF/trace/video) pueden tardar más que un step normal, sobre todo en
 // ejecución paralela. Es independiente del timeout de los steps (genérico).
 Before({ timeout: 120_000 }, async function (this: CustomWorld, scenario) {
+  this.consoleLogs = [];
+
+  // Escenarios de PURA API (@api): validan reglas del backend sin UI. No se abre
+  // navegador — así no quedan páginas "about:blank" en la evidencia. El hook
+  // After ya usa ?. y no toca nada si no hay navegador.
+  if (scenario.pickle.tags.some((t) => t.name === '@api')) {
+    return;
+  }
+
   const featureName = extractFeatureName(scenario.pickle.uri);
   const videoDir = path.join('test-results', 'videos', featureName);
 
@@ -67,7 +76,6 @@ Before({ timeout: 120_000 }, async function (this: CustomWorld, scenario) {
 
   this.page = await this.context.newPage();
 
-  this.consoleLogs = [];
   this.page.on('console', (msg) => {
     if (msg.type() === 'error') {
       this.consoleLogs.push(`[console.error] ${msg.text()}`);

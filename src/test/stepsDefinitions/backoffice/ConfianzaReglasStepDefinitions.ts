@@ -267,6 +267,18 @@ When('5 consumidores distintos reportan {string} desde el mismo dispositivo', { 
   }
 });
 
+// Caso POSITIVO de BUG-4: 5 consumidores distintos, repartidos en 3 dispositivos
+// distintos (d0,d1,d2,d0,d1) → cumple ≥5 reportes, ≥3 consumidores Y ≥3
+// dispositivos → SÍ suspende.
+When('5 consumidores distintos reportan {string} desde 3 dispositivos distintos', { timeout: 40_000 }, async function (this: CustomWorld, _label: string) {
+  const s = this as CustomWorld & RState;
+  const devices = ['qa-disp-A', 'qa-disp-B', 'qa-disp-C'];
+  for (let i = 0; i < 5; i++) {
+    const c = await registerConsumer();
+    await report(c.token, s.vendor!.vendorId, s.vendor!.productId, { seenPrice: 890400 + i, deviceId: devices[i % 3] });
+  }
+});
+
 // Pagar MENOS que lo publicado no perjudica al consumidor: el "no coincidió"
 // no se registra ni cuenta para la suspensión.
 When('un consumidor reporta {string} pagando menos que lo publicado', { timeout: 30_000 }, async function (this: CustomWorld, _label: string) {
