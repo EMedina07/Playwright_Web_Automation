@@ -106,7 +106,9 @@ export abstract class BasePage {
   }
 
   protected async waitForLocator(locator: Locator, timeout = 10_000): Promise<void> {
-    await locator.waitFor({ state: 'visible', timeout });
+    // .first() evita el error de "strict mode" cuando el selector matchea varios
+    // elementos. Como espera de visibilidad/ancla, basta con que el primero sea visible.
+    await locator.first().waitFor({ state: 'visible', timeout });
   }
 
   protected async fillField(

@@ -1,0 +1,52 @@
+{
+  "module": "LoginNegativo",
+  "route": "/web/index.php/auth/login",
+  "description": "EJEMPLO OUTLINE — recorre toda la colección de datos; 'status' excluye registros",
+  "envs": ["qa"],
+
+  "locators": [
+    { "name": "usernameInput", "by": "placeholder", "value": "Username" },
+    { "name": "passwordInput", "by": "placeholder", "value": "Password" },
+    { "name": "loginButton", "by": "role", "value": "button", "name_value": "Login" },
+    { "name": "errorAlert", "by": "css", "value": ".oxd-alert-content-text" }
+  ],
+  "anchorLocator": "loginButton",
+
+  "actions": [
+    { "name": "fillUsername", "type": "fill", "locator": "usernameInput", "label": "campo Usuario" },
+    { "name": "fillPassword", "type": "fill", "locator": "passwordInput", "label": "campo Contraseña" },
+    { "name": "clickLogin", "type": "click", "locator": "loginButton", "label": "botón Login" },
+    {
+      "name": "iniciarSesion",
+      "type": "composite",
+      "label": "completa y envía el formulario de login",
+      "uses": [
+        { "action": "fillUsername", "field": "username" },
+        { "action": "fillPassword", "field": "password" },
+        { "action": "clickLogin" }
+      ]
+    },
+    { "name": "assertError", "type": "assertText", "locator": "errorAlert", "expected": "Invalid credentials", "label": "verifica error de credenciales" }
+  ],
+
+  "data": [
+    { "id": "pass-malo", "username": "Admin", "password": "ClaveMala1", "status": "active" },
+    { "id": "usuario-malo", "username": "noexiste", "password": "admin123" },
+    { "id": "vacios", "username": "", "password": "", "status": "skip" }
+  ],
+
+  "scenarios": [
+    {
+      "title": "Login inválido por cada caso negativo",
+      "tags": ["Regresion"],
+      "jira": "",
+      "outline": true,
+      "examplesColumn": "id",
+      "steps": [
+        { "kw": "Given", "text": "el usuario abre la pantalla de autenticación", "bind": "navigate" },
+        { "kw": "When", "text": "intenta iniciar sesión con el registro \"<id>\"", "bind": "iniciarSesion" },
+        { "kw": "Then", "text": "se muestra el error de credenciales inválidas", "bind": "assertError" }
+      ]
+    }
+  ]
+}
