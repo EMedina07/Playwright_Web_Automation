@@ -11,6 +11,7 @@ import {
 interface RState {
   vendor?: QaVendor;
   registered?: number;
+  registeredLower?: number;
   lastRaw?: { status: number; ok: boolean; title?: string };
   firstConsumer?: { token: string; phone: string };
 }
@@ -291,4 +292,44 @@ When('un consumidor reporta {string} pagando menos que lo publicado', { timeout:
 Then('el reporte no queda registrado', function (this: CustomWorld) {
   assert.strictEqual((this as CustomWorld & RState).registered, 0,
     'Un "no coincidió" pagando MENOS que lo publicado no debía registrarse.');
+});
+
+// Mezcla de reportes válidos e inválidos. Se envían 5, pero solo los 3 de precio
+// MAYOR cuentan: con 3 válidos no se llega al umbral de 5 y el comercio sigue
+// activo. Los 3 dispositivos distintos se cumplen a propósito, para que el
+// recuento de reportes válidos sea la ÚNICA razón de que no se suspenda.
+When('3 consumidores desde 3 dispositivos distintos reportan 3 precios mayores y 2 menores', { timeout: 60_000 }, async function (this: CustomWorld) {
+  const s = this as CustomWorld & RState;
+  const dispositivos = ['qa-mix-A', 'qa-mix-B', 'qa-mix-C'];
+  const consumidores = [await registerConsumer(), await registerConsumer(), await registerConsumer()];
+
+  // Un producto distinto por reporte: el dedup es por (consumidor, producto,
+  // día), así que reusar el mismo producto descartaría reportes por duplicado y
+  // enturbiaría lo que se quiere medir.
+  const productos = [s.vendor!.productId, ...EXTRA_PRODUCTS.map(([id]) => id)];
+
+  // 3 de precio MAYOR (cuentan), uno por consumidor y por dispositivo.
+  let mayores = 0;
+  for (let i = 0; i < 3; i++) {
+    const r = await report(consumidores[i].token, s.vendor!.vendorId, productos[i],
+      { seenPrice: 890_500 + i, deviceId: dispositivos[i] });
+    if (r.registered) mayores++;
+  }
+
+  // 2 de precio MENOR (no deben contar): pagar de menos no es una queja.
+  let menores = 0;
+  for (let i = 0; i < 2; i++) {
+    const r = await report(consumidores[i].token, s.vendor!.vendorId, productos[3 + i],
+      { seenPrice: 1, deviceId: dispositivos[i] });
+    if (r.registered) menores++;
+  }
+
+  s.registered = mayores;
+  s.registeredLower = menores;
+});
+
+Then('solo se registraron los 3 reportes de precio mayor', function (this: CustomWorld) {
+  const s = this as CustomWorld & RState;
+  assert.strictEqual(s.registered, 3, `Los 3 reportes de precio MAYOR debían registrarse; se registraron ${s.registered}.`);
+  assert.strictEqual(s.registeredLower, 0, `Los reportes de precio MENOR no debían registrarse; se registraron ${s.registeredLower}.`);
 });

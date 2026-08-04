@@ -53,9 +53,13 @@ export class ConfianzaPage extends PageHelpers {
     throw new Error(`El comercio "${name}" sigue en la lista de confianza tras el tiempo de espera.`);
   }
 
+  // El detalle se despliega DENTRO de la tabla, en la fila siguiente al comercio
+  // (antes se pintaba al final de la lista). Ya no repite el nombre en un título
+  // —está en la fila de arriba—, así que se espera la región etiquetada para
+  // lectores de pantalla, que sí identifica de quién es el detalle.
   async openDetail(name: string): Promise<void> {
     await this.clickElement(this.row(name).getByRole('button', { name: 'Ver detalle' }), `Ver detalle de "${name}"`);
-    await this.waitForLocator(this.page.getByRole('heading', { name, level: 2 }));
+    await this.waitForLocator(this.page.getByRole('region', { name: `Detalle de ${name}` }));
   }
 
   // Lee "N reportes de M clientes distintos" del detalle abierto.

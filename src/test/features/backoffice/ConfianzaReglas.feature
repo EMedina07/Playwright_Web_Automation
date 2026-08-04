@@ -168,3 +168,15 @@ Feature: Confianza de comercios — reglas de suspensión, casos negativos y edg
     Given un comercio de prueba activo y publicado
     When un consumidor reporta "no coincidió" pagando menos que lo publicado
     Then el reporte no queda registrado
+
+  # Mezcla deliberada: se envían 5 reportes, pero solo 3 son de precio MAYOR.
+  # Los otros 2 (precio menor) no cuentan, así que el total válido se queda en 3
+  # y NO alcanza el umbral. Los 3 dispositivos distintos SÍ se cumplen, para que
+  # lo único que impida la suspensión sea el recuento de reportes válidos.
+  @Regresion @bug
+  Scenario: [BUG-5] Cinco reportes de los que solo 3 son de precio mayor no suspenden
+    Given un comercio de prueba activo y publicado
+    And el comercio publica 8 productos más
+    When 3 consumidores desde 3 dispositivos distintos reportan 3 precios mayores y 2 menores
+    Then solo se registraron los 3 reportes de precio mayor
+    And el comercio sigue activo
