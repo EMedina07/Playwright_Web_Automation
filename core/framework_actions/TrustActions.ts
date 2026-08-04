@@ -52,7 +52,7 @@ function signedHeaders(rawApiKey: string, body: string): Record<string, string> 
   return { 'X-Api-Key': rawApiKey, 'X-Timestamp': ts, 'X-Nonce': nonce, 'X-Signature': signature, 'Content-Type': 'application/json' };
 }
 
-export interface BatchResult { status: string; totalLines: number; inserted: number; sentToReview: number; quarantined: number }
+export interface BatchResult { status: string; totalLines: number; inserted: number; sentToReview: number; quarantined: number; autoCreatedProducts: number }
 
 export async function postSignedBatch(vendorId: number, apiKey: string, payload: unknown): Promise<BatchResult> {
   const body = JSON.stringify(payload);
