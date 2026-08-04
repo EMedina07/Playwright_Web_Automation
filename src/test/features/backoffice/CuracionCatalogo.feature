@@ -138,14 +138,14 @@ Feature: Curación de catálogo — auto-creación, curación, sinónimos y cobe
   Scenario: La aritmética de la cobertura siempre cuadra
     Then la cobertura cumple: con precio + sin precio = total, y el detalle lista exactamente los sin precio
 
-  @Regresion
+  @Regresion @exclusivo
   Scenario: Un producto nuevo con precio de un comercio activo entra CUBIERTO
     Given un comercio QA activo con API key
     And la cobertura actual está anotada
     When el comercio publica un producto con GTIN nuevo y nombre "Avena Cobertura QA"
     Then el total de productos subió en 1 sin abrir huecos nuevos
 
-  @Regresion
+  @Regresion @exclusivo
   Scenario: Un producto sin precio abre un hueco y la primera publicación lo cierra
     Given un comercio QA activo con API key
     And la cobertura actual está anotada

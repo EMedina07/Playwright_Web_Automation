@@ -65,7 +65,8 @@ const CURACION_VALIDA = {
 
 // Higiene: un caso negativo deja su producto pendiente en la cola del admin.
 // Se cura con datos válidos al salir para que la cola quede como estaba.
-After(async function (this: CustomWorld & CState) {
+// Timeout generoso: getAdminToken puede esperar la próxima ventana TOTP (~30 s).
+After({ timeout: 90_000 }, async function (this: CustomWorld & CState) {
   if (this.productId) {
     const token = await getAdminToken();
     const queue = await pendingCuration(token);

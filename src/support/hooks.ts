@@ -1,4 +1,4 @@
-import { After, AfterStep, Before, BeforeAll, setDefaultTimeout } from '@cucumber/cucumber';
+import { After, AfterStep, Before, BeforeAll, setDefaultTimeout, setParallelCanAssign } from '@cucumber/cucumber';
 import { renderSkippedCard } from '../../core/framework_actions/StepLogger';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -8,6 +8,20 @@ import { CustomWorld } from './world';
 import { generateScenarioPdf } from '../../core/reports/PdfReporter';
 
 setDefaultTimeout(60_000);
+
+// La suite corre con parallel=4, pero algunos escenarios dependen de ESTADO
+// GLOBAL del sistema (ej. el precio por día de la pauta publicitaria, o el
+// delta del total de productos en cobertura): si corren mientras otro worker
+// publica o crea productos, se pisan y el resultado es aleatorio. @exclusivo
+// = mutex global: espera pista vacía y nadie entra mientras corre.
+const esExclusivo = (p: { tags: readonly { name: string }[] }) =>
+  p.tags.some((t) => t.name === '@exclusivo');
+
+setParallelCanAssign((pickle, picklesInProgress) => {
+  if (picklesInProgress.some(esExclusivo)) return false;
+  if (esExclusivo(pickle)) return picklesInProgress.length === 0;
+  return true;
+});
 
 const cleanedVideoFolders = new Set<string>();
 
