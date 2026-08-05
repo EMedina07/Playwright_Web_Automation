@@ -8,7 +8,7 @@ import {
 import {
   vendorJwt, addCard, createPromotion, myPromotions, quote, deactivate, reactivate,
   adminDeactivate, adminReactivate, getSettings, putSettings, publicSettings, nearby,
-  isoInDays, nuevoCaption, type PromoSettings, type PromotionRow,
+  isoInDays, nuevoCaption, borrarPromo, type PromoSettings, type PromotionRow,
 } from '../../../../core/framework_actions/PromotionActions';
 
 interface PState {
@@ -54,11 +54,11 @@ async function promoDe(v: QaVendor, id: number): Promise<PromotionRow> {
 // Timeout generoso: getAdminToken puede esperar la próxima ventana TOTP
 // (~30 s) y el default de cucumber mataría el hook a mitad de la restauración.
 After({ timeout: 90_000 }, async function (this: CustomWorld & PState) {
-  for (const { vendor, id } of this.createdPromos ?? []) {
-    const row = (await myPromotions(vendor).catch(() => [])).find((p) => p.id === id);
-    if (row?.isActive) {
-      await deactivate(vendor, id).catch(() => undefined);
-    }
+  // Las promos QA se BORRAN (pedido del dueño: el registro de moderación no
+  // debe llenarse de residuos de cada corrida). Las reales jamás se borran —
+  // por eso esto va por SQL y no por un endpoint.
+  for (const { id } of this.createdPromos ?? []) {
+    try { borrarPromo(id); } catch { /* best-effort */ }
   }
   if (this.settingsBase && !this.settingsRestored) {
     await putSettings(await getAdminToken(),

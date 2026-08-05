@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
-import { raw, type QaVendor, type Raw } from './TrustActions';
+import { execFileSync } from 'node:child_process';
+import { provisionActiveVendor, raw, type QaVendor, type Raw } from './TrustActions';
 import { generateTotp } from './TotpGenerator';
 
 // Acciones del módulo de promociones (B-02): publicar con imagen (multipart),
@@ -137,3 +138,25 @@ export const nearby = async (): Promise<PromotionRow[]> => {
 };
 
 export const nuevoCaption = (etiqueta: string) => `${etiqueta} QA ${Date.now()}${crypto.randomInt(100, 999)}`;
+
+/// Comercio QA con tarjeta, UNO por worker (aprovisionar toma segundos; las
+/// promos por escenario son lo barato).
+let cachedVendorConTarjeta: QaVendor | null = null;
+export async function vendorConTarjeta(adminToken: string): Promise<QaVendor> {
+  if (!cachedVendorConTarjeta) {
+    cachedVendorConTarjeta = await provisionActiveVendor(adminToken);
+    await addCard(cachedVendorConTarjeta);
+  }
+  return cachedVendorConTarjeta;
+}
+
+/// Borra una promoción de prueba de la base (no hay endpoint de borrado: las
+/// promociones reales se desactivan, jamás se borran — pero el registro del
+/// admin no debe llenarse de residuos QA; pedido del dueño).
+export function borrarPromo(promotionId: number): void {
+  execFileSync('docker', [
+    'exec', process.env.DB_CONTAINER ?? 'pricelist-db',
+    'psql', '-U', process.env.DB_USER ?? 'pricelist', '-d', process.env.DB_NAME ?? 'pricelist_dev',
+    '-t', '-A', '-c', `DELETE FROM promotions WHERE id = ${Math.trunc(promotionId)}`,
+  ], { encoding: 'utf8' });
+}
