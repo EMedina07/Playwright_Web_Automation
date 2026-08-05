@@ -26,6 +26,25 @@ export class PromocionesModeracionPage extends PageHelpers {
     await this.waitForLocator(this.page.getByRole('heading', { name: 'Moderación de promociones' }));
   }
 
+  // ── Configuración: precio de la publicidad ────────────────────────────────
+
+  /// El input del precio es el decimal (step 0.01); el del intervalo es entero.
+  async setAdvertisingPrice(pesos: number): Promise<void> {
+    await this.fillField(this.page.locator('input[step="0.01"]'), String(pesos), `Precio de la publicidad: RD$${pesos}/día`);
+    await this.clickElement(this.page.getByRole('button', { name: 'Guardar' }), 'Guardar configuración');
+  }
+
+  /// "Guardado." confirma y debe RETIRARSE solo a los pocos segundos
+  /// (pedido del dueño: pegado para siempre hacía dudar de si el último
+  /// cambio se guardó o era el aviso de uno anterior).
+  async waitGuardadoApareceYDesaparece(): Promise<void> {
+    const aviso = this.page.getByText('Guardado.', { exact: true });
+    await this.captureCurrentState('ASSERT', 'El aviso "Guardado." aparece al guardar', 'getByText(Guardado.).visible');
+    await aviso.waitFor({ state: 'visible', timeout: 10_000 });
+    await this.captureCurrentState('ASSERT', 'Y se retira solo a los pocos segundos', 'getByText(Guardado.).hidden');
+    await aviso.waitFor({ state: 'hidden', timeout: 8_000 });
+  }
+
   async deactivate(caption: string, reason: string): Promise<void> {
     await this.clickElement(this.card(caption).getByRole('button', { name: 'Desactivar' }), `Desactivar "${caption}"`);
     await this.fillField(this.page.getByTestId('reason-input'), reason, 'Motivo de la desactivación');

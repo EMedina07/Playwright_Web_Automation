@@ -150,6 +150,24 @@ export async function vendorConTarjeta(adminToken: string): Promise<QaVendor> {
   return cachedVendorConTarjeta;
 }
 
+/// El cobro real que dejó la publicación de una promoción (pago + factura del
+/// ledger). La vara contra la que se valida "el monto cobrado es el definido
+/// por el admin": días de la ventana × precio/día.
+export function cobroDePromocion(promotionId: number): { amountCents: number; status: string; invoiceStatus: string } {
+  const out = execFileSync('docker', [
+    'exec', process.env.DB_CONTAINER ?? 'pricelist-db',
+    'psql', '-U', process.env.DB_USER ?? 'pricelist', '-d', process.env.DB_NAME ?? 'pricelist_dev',
+    '-t', '-A', '-c',
+    `SELECT p.amount_cents || '|' || p.status || '|' || i.status
+     FROM payments p JOIN invoices i ON i.id = p.invoice_id
+     WHERE p.related_entity_type = 'promotion' AND p.related_entity_id = ${Math.trunc(promotionId)}
+     ORDER BY p.id DESC LIMIT 1`,
+  ], { encoding: 'utf8' }).trim().split('\n')[0];
+  if (!out) throw new Error(`No hay ningún cobro registrado para la promoción ${promotionId}.`);
+  const [amountCents, status, invoiceStatus] = out.split('|');
+  return { amountCents: Number(amountCents), status, invoiceStatus };
+}
+
 /// Borra una promoción de prueba de la base (no hay endpoint de borrado: las
 /// promociones reales se desactivan, jamás se borran — pero el registro del
 /// admin no debe llenarse de residuos QA; pedido del dueño).

@@ -26,6 +26,37 @@ export class PortalPromocionesPage extends PageHelpers {
     await this.waitForLocator(this.page.getByRole('heading', { name: 'Promociones patrocinadas' }));
   }
 
+  // ── Publicar: cotización en vivo y pago ───────────────────────────────────
+
+  /// Los dos date-pickers del formulario: Inicio y Fin, en ese orden.
+  async setCampaignDates(inicioISO: string, finISO: string): Promise<void> {
+    const fechas = this.page.locator('input[type="date"]');
+    await this.fillField(fechas.nth(0), inicioISO, `Inicio de campaña ${inicioISO}`);
+    await this.fillField(fechas.nth(1), finISO, `Fin de campaña ${finISO}`);
+  }
+
+  /// La línea "N día(s) × RD$X.XX/día = RD$Y.YY" que recotiza en vivo.
+  async quoteLine(timeout = 10_000): Promise<string> {
+    const linea = this.page.locator('.callout.good strong');
+    await linea.waitFor({ state: 'visible', timeout });
+    return (await linea.textContent())?.trim() ?? '';
+  }
+
+  async publishButtonLabel(): Promise<string> {
+    return (await this.page.getByRole('button', { name: /Publicar/ }).textContent())?.trim() ?? '';
+  }
+
+  /// Publica de verdad desde el formulario (imagen + texto + fechas ya puestas)
+  /// y espera a que la campaña aparezca en la lista — cobro incluido.
+  async publicar(caption: string, imagen: Buffer): Promise<void> {
+    await this.page.locator('input[type="file"]').setInputFiles({
+      name: 'promo-qa.png', mimeType: 'image/png', buffer: imagen,
+    });
+    await this.fillField(this.page.locator('textarea'), caption, 'Texto de la promoción');
+    await this.clickElement(this.page.getByRole('button', { name: /Publicar y pagar/ }), 'Publicar y pagar');
+    await this.waitForLocator(this.card(caption).locator('.badge', { hasText: 'Activa' }));
+  }
+
   /// Pulsa Desactivar y responde la confirmación nativa. aceptar=false simula
   /// el arrepentimiento: la campaña pagada debe seguir activa.
   async deactivate(caption: string, aceptar: boolean): Promise<void> {
