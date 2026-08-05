@@ -24,7 +24,7 @@ Feature: Promociones patrocinadas — publicación, cobro, moderación y carruse
     Examples:
       | caso               | intervalo | precio  |
       | intervalo muy bajo | 29        | 50000   |
-      | intervalo muy alto | 1801      | 50000   |
+      | intervalo muy alto | 3601      | 50000   |
       | precio negativo    | 180       | -1      |
       | precio absurdo     | 180       | 5000001 |
 
