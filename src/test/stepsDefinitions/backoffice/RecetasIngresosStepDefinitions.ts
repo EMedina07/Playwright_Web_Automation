@@ -9,7 +9,10 @@ import { IngresosPage } from '../../../pages/IngresosPage';
 import { PlanesPage } from '../../../pages/PlanesPage';
 
 const MRR = 'Ingreso mensual proyectado (MRR)';
-const TARJETAS = [MRR, 'Vigentes', 'Bajas del mes', 'Suscripciones este mes', 'Publicidad este mes', 'Total del mes'];
+// Solo las tarjetas del dashboard: los montos del mes viven ahora en la fila
+// "(en curso)" de la tabla de 12 meses (el dueño quitó las tarjetas
+// redundantes de ingresos cobrados).
+const TARJETAS = [MRR, 'Vigentes', 'Bajas del mes'];
 
 interface RState {
   vendor?: QaVendor;
@@ -39,6 +42,10 @@ Given('las tarjetas de Ingresos están anotadas desde la pantalla', { timeout: 9
   const page = this.getPage(IngresosPage);
   await page.openAsAdmin(await getAdminToken());
   this.fotoUi = await page.leerTarjetas(TARJETAS);
+  const mes = await page.mesEnCurso();
+  this.fotoUi['Suscripciones este mes'] = mes.subscriptions;
+  this.fotoUi['Publicidad este mes'] = mes.advertising;
+  this.fotoUi['Total del mes'] = mes.total;
 });
 
 When('el admin asigna PRO por {int} mes desde la pantalla de Planes con nota {string}', { timeout: 90_000 }, async function (this: CustomWorld & RState, meses: number, nota: string) {
@@ -54,8 +61,7 @@ Then('en Ingresos, en segundos: el MRR sube {int}, Vigentes {int} y las suscripc
   await page.esperarTarjeta(MRR, this.fotoUi![MRR] + mrr);
   assert.strictEqual(await page.tarjeta('Vigentes'), this.fotoUi!['Vigentes'] + vigentes,
     'Vigentes no refleja la suscripción asignada.');
-  assert.strictEqual(await page.tarjeta('Suscripciones este mes'), this.fotoUi!['Suscripciones este mes'] + subsMes,
-    'El cobro no aparece en "Suscripciones este mes".');
+  await page.esperarMesEnCurso('subscriptions', this.fotoUi!['Suscripciones este mes'] + subsMes);
 });
 
 Then('en la auditoría el primer pago de suscripción es {string} {string} del comercio', { timeout: 90_000 }, async function (this: CustomWorld & RState, monto: string, estado: string) {
@@ -101,7 +107,7 @@ Then('el pago sigue en la auditoría aunque la suscripción se canceló', { time
 Then('en Ingresos, en segundos: la publicidad del mes sube {int}', { timeout: 90_000 }, async function (this: CustomWorld & RState, pesos: number) {
   const page = this.getPage(IngresosPage);
   await page.openAsAdmin(await getAdminToken());
-  await page.esperarTarjeta('Publicidad este mes', this.fotoUi!['Publicidad este mes'] + pesos);
+  await page.esperarMesEnCurso('advertising', this.fotoUi!['Publicidad este mes'] + pesos);
 });
 
 Then('en la auditoría el primer pago de publicidad es {string} {string} del comercio', { timeout: 90_000 }, async function (this: CustomWorld & RState, monto: string, estado: string) {

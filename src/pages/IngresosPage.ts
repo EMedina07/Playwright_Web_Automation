@@ -42,6 +42,32 @@ export class IngresosPage extends PageHelpers {
     return foto;
   }
 
+  /// La fila "en curso" (primera) de la tabla de 12 meses: desde que el dueño
+  /// quitó las tarjetas redundantes, el mes corriente se lee AQUÍ.
+  async mesEnCurso(): Promise<{ subscriptions: number; advertising: number; total: number }> {
+    const fila = this.page.locator('table tbody tr').filter({ hasText: 'en curso' }).first();
+    await fila.waitFor({ state: 'visible', timeout: 15_000 });
+    const celdas = await fila.locator('td').allTextContents();
+    // Mes | Suscripciones | Publicidad | Total | barra
+    return {
+      subscriptions: IngresosPage.parse(celdas[1] ?? ''),
+      advertising: IngresosPage.parse(celdas[2] ?? ''),
+      total: IngresosPage.parse(celdas[3] ?? ''),
+    };
+  }
+
+  async esperarMesEnCurso(campo: 'subscriptions' | 'advertising' | 'total', esperado: number, timeoutMs = 30_000): Promise<void> {
+    const inicio = Date.now();
+    await this.captureCurrentState('ASSERT', `Mes en curso: ${campo} debe llegar a ${esperado}`, 'fila (en curso) + reload');
+    while (Date.now() - inicio < timeoutMs) {
+      if ((await this.mesEnCurso())[campo] === esperado) return;
+      await this.page.waitForTimeout(1500);
+      await this.page.reload();
+    }
+    const real = (await this.mesEnCurso())[campo];
+    throw new Error(`El mes en curso quedó con ${campo}=${real}; se esperaba ${esperado}.`);
+  }
+
   /// Espera (recargando) a que la tarjeta llegue al valor esperado — cubre el
   /// "en segundos" de la receta: el refresco de la vista se encola tras la
   /// acción y el admin solo recarga la pantalla.
