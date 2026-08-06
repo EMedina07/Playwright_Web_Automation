@@ -79,7 +79,10 @@ export class SolicitudesPage extends PageHelpers {
     await this.navigate(environments.baseURL);
     await this.page.evaluate((t) => sessionStorage.setItem('pricelist.adminToken', t), token);
     await this.page.reload();
-    await this.waitForLocator(this.adminName); // Solicitudes es la pestaña por defecto
+    // La pestaña por defecto tras el login ahora es "Ingresos" (decisión del
+    // dueño): Solicitudes se abre explícitamente.
+    await this.clickElement(this.page.getByRole('button', { name: 'Solicitudes' }), 'pestaña Solicitudes');
+    await this.waitForLocator(this.adminName);
   }
 
   async selectFilter(filter: Filter): Promise<void> {
