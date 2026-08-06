@@ -6,14 +6,21 @@ import { provisionActiveVendor, type QaVendor } from '../../../../core/framework
 import {
   adminAssign, adminCancel, dashboard, dashboardRefrescado, refreshRevenue,
   moverVencimiento, moverCancelacion, insertarCancelacionTecnica, borrarSuscripcion,
-  montoFacturado, pagoDeSuscripcion, agregarSucursal, type Dashboard,
+  montoFacturado, pagoDeSuscripcion, agregarSucursal, revenueBreakdown, adminRefund,
+  moverPagoAlMesPasado, type Dashboard, type RevenueBreakdown,
 } from '../../../../core/framework_actions/BillingActions';
+import {
+  vendorConTarjeta, createPromotion, getSettings, borrarPromo, isoInDays, nuevoCaption,
+} from '../../../../core/framework_actions/PromotionActions';
 
 interface IState {
   base?: Dashboard;
+  baseIngresos?: RevenueBreakdown;
   vendor?: QaVendor;
   subId?: number;
   subIdsCreados?: number[];
+  promoIdCreada?: number;
+  adsEsperado?: number;
   lastAssign?: { status: number; ok: boolean; data: any };
 }
 
@@ -23,6 +30,9 @@ interface IState {
 After({ timeout: 90_000 }, async function (this: CustomWorld & IState) {
   for (const id of this.subIdsCreados ?? []) {
     try { borrarSuscripcion(id); } catch { /* best-effort */ }
+  }
+  if (this.promoIdCreada !== undefined) {
+    try { borrarPromo(this.promoIdCreada); } catch { /* best-effort */ }
   }
   if ((this.subIdsCreados ?? []).length > 0) {
     await refreshRevenue().catch(() => undefined);
@@ -232,6 +242,75 @@ Then('la asignación se rechaza mencionando {string}', function (this: CustomWor
   assert.ok(!r.ok, `Asignar FREE respondió ${r.status}: crearía suscripciones de valor cero que inflan Vigentes.`);
   assert.ok(JSON.stringify(r.data).toLowerCase().includes(palabra.toLowerCase()),
     `El error no menciona "${palabra}": ${JSON.stringify(r.data)}`);
+});
+
+// ── Ingresos cobrados por fuente ─────────────────────────────────────────────
+
+Given('la foto de los ingresos está tomada', { timeout: 60_000 }, async function (this: CustomWorld & IState) {
+  this.baseIngresos = await revenueBreakdown(await getAdminToken());
+});
+
+When('un comercio QA publica una campaña pagada de {int} días', { timeout: 120_000 }, async function (this: CustomWorld & IState, dias: number) {
+  const vendor = await vendorConTarjeta(await getAdminToken());
+  // El monto esperado sale del precio VIGENTE de la pauta: días × precio/día.
+  const settings = await getSettings(await getAdminToken());
+  this.adsEsperado = (dias * settings.advertisingPricePerDayCents) / 100;
+
+  const r = await createPromotion(vendor, {
+    caption: nuevoCaption('Ingresos'), startsOn: isoInDays(0), endsOn: isoInDays(dias - 1),
+  });
+  assert.ok(r.ok, `Publicar la campaña falló: ${r.status} ${JSON.stringify(r.data)}`);
+  this.promoIdCreada = (r.data as { promotionId: number }).promotionId;
+});
+
+Then('los ingresos por publicidad del mes suben exactamente el precio de {int} días', { timeout: 60_000 }, async function (this: CustomWorld & IState, _dias: number) {
+  const d = await revenueBreakdown(await getAdminToken());
+  assert.strictEqual(d.thisMonth.advertising, this.baseIngresos!.thisMonth.advertising + this.adsEsperado!,
+    `Publicidad del mes: esperado +${this.adsEsperado}, real ${d.thisMonth.advertising - this.baseIngresos!.thisMonth.advertising}.`);
+});
+
+Then('el total del mes es la suma de las dos fuentes', { timeout: 60_000 }, async function (this: CustomWorld & IState) {
+  const d = await revenueBreakdown(await getAdminToken());
+  assert.strictEqual(d.thisMonth.total, d.thisMonth.subscriptions + d.thisMonth.advertising,
+    'El total del mes no cuadra con la suma de suscripciones + publicidad.');
+});
+
+Then('los ingresos por suscripciones del mes suben exactamente RD${float}', { timeout: 60_000 }, async function (this: CustomWorld & IState, pesos: number) {
+  const d = await revenueBreakdown(await getAdminToken());
+  assert.strictEqual(d.thisMonth.subscriptions, this.baseIngresos!.thisMonth.subscriptions + pesos,
+    `Suscripciones del mes: esperado +${pesos}, real ${d.thisMonth.subscriptions - this.baseIngresos!.thisMonth.subscriptions}.`);
+});
+
+When('el admin reembolsa ese cobro', { timeout: 60_000 }, async function (this: CustomWorld & IState) {
+  const pago = pagoDeSuscripcion(this.subId!);
+  const r = await adminRefund(await getAdminToken(), pago.id, 'QA: reembolso para estrés de ingresos');
+  assert.ok(r.ok, `El reembolso falló: ${r.status} ${JSON.stringify(r.data)}`);
+});
+
+Then('los ingresos por suscripciones del mes vuelven a la foto', { timeout: 60_000 }, async function (this: CustomWorld & IState) {
+  const d = await revenueBreakdown(await getAdminToken());
+  assert.strictEqual(d.thisMonth.subscriptions, this.baseIngresos!.thisMonth.subscriptions,
+    'Un cobro REEMBOLSADO sigue contando como ingreso.');
+});
+
+When('ese cobro se mueve al mes pasado', function (this: CustomWorld & IState) {
+  moverPagoAlMesPasado(pagoDeSuscripcion(this.subId!).id);
+});
+
+Then('los ingresos del mes vuelven a la foto y el mes anterior sube RD${float}', { timeout: 60_000 }, async function (this: CustomWorld & IState, pesos: number) {
+  const d = await revenueBreakdown(await getAdminToken());
+  assert.strictEqual(d.thisMonth.subscriptions, this.baseIngresos!.thisMonth.subscriptions,
+    'Un cobro del mes pasado sigue contando en el mes corriente.');
+  const mesAnterior = d.months[1];
+  const mesAnteriorBase = this.baseIngresos!.months[1];
+  assert.strictEqual(mesAnterior.subscriptions, mesAnteriorBase.subscriptions + pesos,
+    'El cobro movido no aparece en el bucket del mes anterior.');
+});
+
+Then('el histórico muestra exactamente 12 meses', { timeout: 60_000 }, async function (this: CustomWorld & IState) {
+  const d = await revenueBreakdown(await getAdminToken());
+  assert.strictEqual(d.months.length, 12,
+    `El histórico trae ${d.months.length} filas: deben ser SIEMPRE 12 (meses sin cobros en 0).`);
 });
 
 Then('sin refresco manual, Vigentes refleja la suscripción nueva en menos de medio minuto', { timeout: 60_000 }, async function (this: CustomWorld & IState) {

@@ -78,14 +78,37 @@ export function montoFacturado(subscriptionId: number): number {
 }
 
 /// El último pago del ledger ligado a la suscripción (cruce contable).
-export function pagoDeSuscripcion(subscriptionId: number): { amountCents: number; status: string } {
+export function pagoDeSuscripcion(subscriptionId: number): { id: number; amountCents: number; status: string } {
   const out = sql(`
-    SELECT amount_cents || '|' || status FROM payments
+    SELECT id || '|' || amount_cents || '|' || status FROM payments
     WHERE related_entity_type = 'subscription' AND related_entity_id = ${Math.trunc(subscriptionId)}
     ORDER BY id DESC LIMIT 1`);
   if (!out) throw new Error(`No hay pagos en el ledger para la suscripción ${subscriptionId}.`);
-  const [amountCents, status] = out.split('|');
-  return { amountCents: Number(amountCents), status };
+  const [id, amountCents, status] = out.split('|');
+  return { id: Number(id), amountCents: Number(amountCents), status };
+}
+
+// ── Ingresos cobrados por fuente (desglose del dashboard) ────────────────────
+
+export interface RevenueSlice { subscriptions: number; advertising: number; total: number }
+export interface RevenueBreakdown {
+  thisMonth: RevenueSlice; allTime: RevenueSlice;
+  months: { month: string; subscriptions: number; advertising: number; total: number }[];
+}
+
+export async function revenueBreakdown(token: string): Promise<RevenueBreakdown> {
+  const r = await raw('/api/admin/billing/revenue-breakdown', { token });
+  if (!r.ok) throw new Error(`revenue-breakdown -> ${r.status}`);
+  return r.data as RevenueBreakdown;
+}
+
+export const adminRefund = (token: string, paymentId: number, reason: string): Promise<Raw> =>
+  raw(`/api/admin/billing/payments/${paymentId}/refund`, { method: 'POST', token, body: { reason } });
+
+/// Mueve un cobro al mes pasado (SQL): estresa el corte mensual del histórico
+/// sin esperar un mes de verdad.
+export function moverPagoAlMesPasado(paymentId: number): void {
+  sql(`UPDATE payments SET created_at = now() - interval '1 month' WHERE id = ${Math.trunc(paymentId)}`);
 }
 
 /// Sucursal extra para el comercio QA (activa la escala por sucursales).

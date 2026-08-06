@@ -103,3 +103,30 @@ Feature: Dashboard de ingresos — MRR, Vigentes, Por vencer, Vencidas y Bajas
     And un comercio QA sin suscripción
     When el admin le asigna PRO por 1 mes
     Then sin refresco manual, Vigentes refleja la suscripción nueva en menos de medio minuto
+
+  # ── Ingresos cobrados por fuente (suscripciones vs publicidad) ────────────
+
+  @Regresion
+  Scenario: La publicidad cobrada entra en los ingresos del mes con su monto exacto
+    Given la foto de los ingresos está tomada
+    When un comercio QA publica una campaña pagada de 2 días
+    Then los ingresos por publicidad del mes suben exactamente el precio de 2 días
+    And el total del mes es la suma de las dos fuentes
+
+  @Regresion
+  Scenario: La suscripción cobrada entra en los ingresos del mes y el reembolso la saca
+    Given la foto de los ingresos está tomada
+    And un comercio QA sin suscripción
+    When el admin le asigna PRO por 1 mes
+    Then los ingresos por suscripciones del mes suben exactamente RD$2000.00
+    When el admin reembolsa ese cobro
+    Then los ingresos por suscripciones del mes vuelven a la foto
+
+  @Regresion
+  Scenario: El histórico corta por mes y siempre muestra 12 filas
+    Given la foto de los ingresos está tomada
+    And un comercio QA sin suscripción
+    When el admin le asigna PRO por 1 mes
+    And ese cobro se mueve al mes pasado
+    Then los ingresos del mes vuelven a la foto y el mes anterior sube RD$2000.00
+    And el histórico muestra exactamente 12 meses
