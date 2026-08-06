@@ -79,6 +79,17 @@ export function borrarSuscripcion(subscriptionId: number): void {
   sql(`DELETE FROM subscriptions WHERE id = ${id}`);
 }
 
+/// Higiene para flujos por UI (donde no hay subscriptionId a mano): borra
+/// TODAS las suscripciones del comercio QA con su rastro en el ledger.
+export function borrarSuscripcionesDeVendor(vendorId: number): void {
+  const id = Math.trunc(vendorId);
+  sql(`DELETE FROM payments WHERE related_entity_type = 'subscription'
+       AND related_entity_id IN (SELECT id FROM subscriptions WHERE vendor_id = ${id})`);
+  sql(`DELETE FROM invoices WHERE related_entity_type = 'subscription'
+       AND related_entity_id IN (SELECT id FROM subscriptions WHERE vendor_id = ${id})`);
+  sql(`DELETE FROM subscriptions WHERE vendor_id = ${id}`);
+}
+
 /// El monto MENSUAL facturado que quedó en la suscripción (la vara del MRR).
 export function montoFacturado(subscriptionId: number): number {
   return Number(sql(`SELECT current_amount_cents FROM subscriptions WHERE id = ${Math.trunc(subscriptionId)}`));
