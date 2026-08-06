@@ -69,7 +69,14 @@ export function insertarCancelacionTecnica(vendorId: number): number {
 }
 
 export function borrarSuscripcion(subscriptionId: number): void {
-  sql(`DELETE FROM subscriptions WHERE id = ${Math.trunc(subscriptionId)}`);
+  const id = Math.trunc(subscriptionId);
+  // También su rastro en el ledger: el ledger real es inmutable por diseño,
+  // pero los cobros QA no son ingresos — dejarlos infló "Suscripciones este
+  // mes" a RD$228,600 fantasma (hallazgo del dueño). El journal (bitácora) se
+  // queda: no suma en ningún total.
+  sql(`DELETE FROM payments WHERE related_entity_type = 'subscription' AND related_entity_id = ${id}`);
+  sql(`DELETE FROM invoices WHERE related_entity_type = 'subscription' AND related_entity_id = ${id}`);
+  sql(`DELETE FROM subscriptions WHERE id = ${id}`);
 }
 
 /// El monto MENSUAL facturado que quedó en la suscripción (la vara del MRR).

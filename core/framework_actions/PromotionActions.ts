@@ -172,9 +172,15 @@ export function cobroDePromocion(promotionId: number): { amountCents: number; st
 /// promociones reales se desactivan, jamás se borran — pero el registro del
 /// admin no debe llenarse de residuos QA; pedido del dueño).
 export function borrarPromo(promotionId: number): void {
-  execFileSync('docker', [
+  const id = Math.trunc(promotionId);
+  const psql = (statement: string) => execFileSync('docker', [
     'exec', process.env.DB_CONTAINER ?? 'pricelist-db',
     'psql', '-U', process.env.DB_USER ?? 'pricelist', '-d', process.env.DB_NAME ?? 'pricelist_dev',
-    '-t', '-A', '-c', `DELETE FROM promotions WHERE id = ${Math.trunc(promotionId)}`,
+    '-t', '-A', '-c', statement,
   ], { encoding: 'utf8' });
+  // También su rastro en el ledger: los cobros QA no son ingresos — dejarlos
+  // inflaba "Publicidad este mes" en el dashboard (hallazgo del dueño).
+  psql(`DELETE FROM payments WHERE related_entity_type = 'promotion' AND related_entity_id = ${id}`);
+  psql(`DELETE FROM invoices WHERE related_entity_type = 'promotion' AND related_entity_id = ${id}`);
+  psql(`DELETE FROM promotions WHERE id = ${id}`);
 }
