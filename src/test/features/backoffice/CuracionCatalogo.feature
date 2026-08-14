@@ -1,5 +1,5 @@
 @backoffice @catalogo @api
-Feature: Curación de catálogo — auto-creación, curación, sinónimos y cobertura
+Feature: Gestión de catálogo — auto-creación, curación, sinónimos y cobertura
 
   Verificación a nivel de API del módulo de curación (el servidor es la capa
   de cumplimiento; la pantalla solo refleja estas reglas): la cola de curación
