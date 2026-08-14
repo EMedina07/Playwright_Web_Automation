@@ -41,31 +41,41 @@ Feature: Ciclo de vida del plan Pro — renovaciones, fallos, bajas y bordes del
     Then el ledger registra exactamente 1 pagos de suscripción del comercio
     And el comercio tiene 1 suscripciones: 0 canceladas y 1 abiertas
 
-  @Regresion
-  Scenario: Cancelar y re-suscribirse deja el historial completo: una baja y una activa
+  @Regresion @exclusivo
+  Scenario: Cancelar y re-suscribirse deja una baja, una activa y el MRR cuenta al comercio UNA vez
     Given un comercio QA por API con 1 sucursales y tarjeta en archivo
+    And el MRR está anotado por API
     When el comercio entra al portal y abre su pestaña Plan
     And activa Pro con la tarjeta en archivo desde el portal
     And vuelve al plan Gratis desde el portal
     And activa Pro con la tarjeta en archivo desde el portal
     Then el comercio tiene 2 suscripciones: 1 canceladas y 1 abiertas
     And el ledger registra exactamente 2 pagos de suscripción del comercio
+    And el MRR subió exactamente 2000 pesos: la baja no suma y la nueva sí
 
-  @Regresion
-  Scenario: Un reembolso queda auditado: pago Refunded y su hecho en el journal
+  @Regresion @exclusivo
+  Scenario: Un reembolso queda auditado y RESTA de los ingresos del mes
     Given un comercio QA por API con 1 sucursales y tarjeta en archivo
     And activó Pro por API pagando 2000 pesos
+    And los ingresos del mes están anotados por API
     When el admin reembolsa ese pago por API
-    Then en la auditoría del back-office su pago de suscripción es de 2000 pesos y está "Refunded"
+    Then los ingresos del mes por suscripciones bajan 2000 pesos
+    And en la auditoría del back-office su pago de suscripción es de 2000 pesos y está "Refunded"
     And en el journal del back-office queda el hecho "PAYMENT_REFUNDED" del comercio
 
   @Regresion
-  Scenario: La suspensión bloquea las funciones Pro de verdad
-    Given un comercio QA por API con 1 sucursales y tarjeta en archivo
+  Scenario: La suspensión bloquea las funciones Pro y la publicidad de verdad
+    Con la suscripción suspendida por cobros fallidos no se extienden más
+    servicios: ni las funciones Pro (analítica) ni publicidad nueva
+    pago-por-uso — primero se pone al día (decisión del dueño).
+
+    Given un comercio QA activo y publicado con tarjeta en archivo
     And activó Pro por API pagando 2000 pesos
     Then su analítica Pro responde por API
+    And puede publicar una promoción pagada
     When en base de datos su suscripción queda suspendida por reintentos agotados
     Then su analítica Pro es rechazada por API con el aviso de plan
+    And publicar otra promoción se rechaza por la deuda pendiente
 
   @Regresion @exclusivo
   Scenario: Un tramo negociado sin precio pactado no se cobra solo
