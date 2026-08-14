@@ -2,11 +2,12 @@ import { Given, When, Then, After } from '@cucumber/cucumber';
 import assert from 'node:assert';
 import { CustomWorld } from '../../../support/world';
 import { getAdminToken } from '../../../../core/framework_actions/AdminSession';
-import { provisionActiveVendor, type QaVendor } from '../../../../core/framework_actions/TrustActions';
+import { type QaVendor } from '../../../../core/framework_actions/TrustActions';
 import { vendorConTarjeta } from '../../../../core/framework_actions/PromotionActions';
 import { borrarSuscripcionesDeVendor, refreshRevenue } from '../../../../core/framework_actions/BillingActions';
 import { IngresosPage } from '../../../pages/IngresosPage';
 import { PlanesPage } from '../../../pages/PlanesPage';
+import { PortalPlanPage } from '../../../pages/PortalPlanPage';
 
 const MRR = 'Ingreso mensual proyectado (MRR)';
 // Solo las tarjetas del dashboard: los montos del mes viven ahora en la fila
@@ -29,10 +30,6 @@ After({ timeout: 90_000 }, async function (this: CustomWorld & RState) {
   }
 });
 
-Given('un comercio QA recién aprovisionado para la receta', { timeout: 120_000 }, async function (this: CustomWorld & RState) {
-  this.vendor = await provisionActiveVendor(await getAdminToken());
-});
-
 Given('un comercio QA con tarjeta para la receta', { timeout: 120_000 }, async function (this: CustomWorld & RState) {
   this.vendor = await vendorConTarjeta(await getAdminToken());
 });
@@ -48,11 +45,11 @@ Given('las tarjetas de Ingresos están anotadas desde la pantalla', { timeout: 9
   this.fotoUi['Total del mes'] = mes.total;
 });
 
-When('el admin asigna PRO por {int} mes desde la pantalla de Planes con nota {string}', { timeout: 90_000 }, async function (this: CustomWorld & RState, meses: number, nota: string) {
-  const planes = this.getPage(PlanesPage);
-  await planes.openAsAdmin(await getAdminToken());
-  await planes.asignar(this.vendor!.vendorId, meses, nota);
-  await planes.esperarSuscripcionListada(this.vendor!.name);
+When('el comercio activa Pro desde su portal con la tarjeta en archivo', { timeout: 120_000 }, async function (this: CustomWorld & RState) {
+  const portal = this.getPage(PortalPlanPage);
+  await portal.entrar(this.vendor!.email, this.vendor!.password, this.vendor!.totpSecret);
+  await portal.abrirPlan();
+  await portal.activarProConTarjetaEnArchivo();
 });
 
 Then('en Ingresos, en segundos: el MRR sube {int}, Vigentes {int} y las suscripciones del mes {int}', { timeout: 90_000 }, async function (this: CustomWorld & RState, mrr: number, vigentes: number, subsMes: number) {
@@ -67,23 +64,32 @@ Then('en Ingresos, en segundos: el MRR sube {int}, Vigentes {int} y las suscripc
 Then('en la auditoría el primer pago de suscripción es {string} {string} del comercio', { timeout: 90_000 }, async function (this: CustomWorld & RState, monto: string, estado: string) {
   const planes = this.getPage(PlanesPage);
   await planes.openAsAdmin(await getAdminToken());
-  const pago = await planes.primerPago('Subscription');
+  // Se busca LA FILA DEL COMERCIO (no la primera global): bajo ejecución en
+  // paralelo la fila más reciente puede ser de otro escenario.
+  const pago = await planes.pagoDelComercio(this.vendor!.vendorId, 'Subscription');
   assert.strictEqual(pago.monto, monto, `Monto del pago: esperado ${monto}, visible ${pago.monto}.`);
   assert.strictEqual(pago.estado, estado);
-  assert.strictEqual(pago.comercio, String(this.vendor!.vendorId),
-    'El pago listado no es del comercio de la receta.');
 });
 
 Then('en la auditoría la primera factura de suscripción del comercio está {string}', { timeout: 90_000 }, async function (this: CustomWorld & RState, estado: string) {
-  const factura = await this.getPage(PlanesPage).primeraFactura('Subscription');
+  const factura = await this.getPage(PlanesPage).facturaDelComercio(this.vendor!.vendorId, 'Subscription');
   assert.strictEqual(factura.estado, estado);
-  assert.strictEqual(factura.comercio, String(this.vendor!.vendorId));
 });
 
-When('el admin cancela su suscripción desde la tabla de Planes', { timeout: 90_000 }, async function (this: CustomWorld & RState) {
+When('el comercio vuelve al plan Gratis desde su portal', { timeout: 120_000 }, async function (this: CustomWorld & RState) {
+  const portal = this.getPage(PortalPlanPage);
+  // Los pasos de Ingresos/auditoría dejaron la pestaña en el back-office.
+  await portal.volverAlPortal();
+  await portal.abrirPlan();
+  await portal.volverAGratis();
+});
+
+Then('su suscripción queda listada como {string} en la tabla de Planes', { timeout: 90_000 }, async function (this: CustomWorld & RState, estado: string) {
   const planes = this.getPage(PlanesPage);
   await planes.openAsAdmin(await getAdminToken());
-  await planes.cancelar(this.vendor!.name);
+  const visible = await planes.estadoSuscripcion(this.vendor!.name);
+  assert.strictEqual(visible, estado,
+    `La baja del comercio debía quedar como "${estado}" en el panel y se ve "${visible}".`);
 });
 
 Then('en Ingresos, en segundos: Bajas del mes sube {int} y el MRR y Vigentes vuelven a lo anotado', { timeout: 90_000 }, async function (this: CustomWorld & RState, bajas: number) {
@@ -99,9 +105,9 @@ Then('en Ingresos, en segundos: Bajas del mes sube {int} y el MRR y Vigentes vue
 Then('el pago sigue en la auditoría aunque la suscripción se canceló', { timeout: 90_000 }, async function (this: CustomWorld & RState) {
   const planes = this.getPage(PlanesPage);
   await planes.openAsAdmin(await getAdminToken());
-  const pago = await planes.primerPago('Subscription');
-  assert.strictEqual(pago.comercio, String(this.vendor!.vendorId),
-    'Cancelar borró el cobro del ledger: la plata SÍ entró y el rastro es inmutable.');
+  const pago = await planes.pagoDelComercio(this.vendor!.vendorId, 'Subscription');
+  assert.strictEqual(pago.estado, 'Succeeded',
+    'Cancelar borró o alteró el cobro del ledger: la plata SÍ entró y el rastro es inmutable.');
 });
 
 Then('en Ingresos, en segundos: la publicidad del mes sube {int}', { timeout: 90_000 }, async function (this: CustomWorld & RState, pesos: number) {

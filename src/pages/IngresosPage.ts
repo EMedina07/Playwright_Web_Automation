@@ -42,6 +42,36 @@ export class IngresosPage extends PageHelpers {
     return foto;
   }
 
+  /// Tarjetas cuyo monto se DESBORDA: recortado dentro del span o pintado
+  /// fuera del área útil de la tarjeta. Con montos gigantes el StatValue debe
+  /// encoger la letra — esta medición es la prueba de que lo hizo.
+  async tarjetasConMontoDesbordado(): Promise<string[]> {
+    await this.page.locator('.stat').first().waitFor({ state: 'visible', timeout: 15_000 });
+    const desbordadas = await this.page.$$eval('.stat', (cards) =>
+      cards.filter((card) => {
+        const valor = card.querySelector('.stat-value');
+        if (!valor) return false;
+        // Desborde = el texto quedó recortado dentro del span, o el span se
+        // pinta fuera del rectángulo de su tarjeta.
+        const areaTarjeta = card.getBoundingClientRect();
+        const areaValor = valor.getBoundingClientRect();
+        return valor.scrollWidth > valor.clientWidth + 1
+          || areaValor.right > areaTarjeta.right + 1
+          || areaValor.left < areaTarjeta.left - 1;
+      }).map((card) => card.querySelector('.stat-label')?.textContent?.trim() ?? '(sin etiqueta)'));
+    await this.captureCurrentState('ASSERT',
+      desbordadas.length === 0 ? 'Ningún monto se sale de su tarjeta' : `Desbordadas: ${desbordadas.join(', ')}`,
+      '.stat-value vs área útil de .stat');
+    return desbordadas;
+  }
+
+  /// Reduce la ventana a un ancho móvil: las tarjetas deben re-encogerse.
+  async angostarPantalla(anchoPx: number): Promise<void> {
+    await this.page.setViewportSize({ width: anchoPx, height: 800 });
+    await this.page.waitForTimeout(300); // deja actuar al ResizeObserver
+    await this.captureCurrentState('ACTION', `Pantalla angostada a ${anchoPx}px`, 'viewport');
+  }
+
   /// La fila "en curso" (primera) de la tabla de 12 meses: desde que el dueño
   /// quitó las tarjetas redundantes, el mes corriente se lee AQUÍ.
   async mesEnCurso(): Promise<{ subscriptions: number; advertising: number; total: number }> {

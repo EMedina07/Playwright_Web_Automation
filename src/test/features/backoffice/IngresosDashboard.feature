@@ -66,19 +66,23 @@ Feature: Dashboard de ingresos — MRR, Vigentes, Por vencer, Vencidas y Bajas
   # ── Bajas del mes ─────────────────────────────────────────────────────────
 
   @Regresion
-  Scenario: Cancelar cuenta como baja del mes y saca la suscripción de todo lo demás
+  Scenario: La baja del comercio cuenta como baja del mes y sale de los totales
+    La baja nace del comercio ("Volver al plan Gratis" en su portal) — el
+    admin ya no cancela. Y la cancelada NO desaparece del panel: queda
+    listada con estado Canceled como rastro.
+
     Given la foto del dashboard está tomada
     And un comercio QA con PRO asignado
-    When el admin cancela su suscripción
+    When el comercio se da de baja a Gratis desde su lado
     Then "Bajas del mes" sube 1, Vigentes y MRR vuelven a la foto
-    And la suscripción desaparece de la tabla del panel
-    And cancelarla de nuevo se rechaza
+    And la suscripción queda en el panel con estado "Canceled"
+    And darse de baja de nuevo no crea otra baja
 
   @Regresion
   Scenario: Una baja del mes pasado no cuenta en este mes
     Given la foto del dashboard está tomada
     And un comercio QA con PRO asignado
-    When el admin cancela su suscripción
+    When el comercio se da de baja a Gratis desde su lado
     And la cancelación se mueve al mes pasado
     Then "Bajas del mes" vuelve al valor de la foto
 

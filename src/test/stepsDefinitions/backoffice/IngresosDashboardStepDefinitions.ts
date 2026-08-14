@@ -4,7 +4,7 @@ import { CustomWorld } from '../../../support/world';
 import { getAdminToken } from '../../../../core/framework_actions/AdminSession';
 import { provisionActiveVendor, type QaVendor } from '../../../../core/framework_actions/TrustActions';
 import {
-  adminAssign, adminCancel, dashboard, dashboardRefrescado, refreshRevenue,
+  adminAssign, bajaAGratisPorApi, conteoSuscripciones, dashboard, dashboardRefrescado, refreshRevenue,
   moverVencimiento, moverCancelacion, insertarCancelacionTecnica, borrarSuscripcion,
   montoFacturado, pagoDeSuscripcion, agregarSucursal, revenueBreakdown, adminRefund,
   moverPagoAlMesPasado, type Dashboard, type RevenueBreakdown,
@@ -86,9 +86,10 @@ When('el admin intenta asignarle el plan FREE', async function (this: CustomWorl
   this.lastAssign = await adminAssign(await getAdminToken(), this.vendor!.vendorId, 'FREE', 1);
 });
 
-When('el admin cancela su suscripción', { timeout: 60_000 }, async function (this: CustomWorld & IState) {
-  const r = await adminCancel(await getAdminToken(), this.vendor!.vendorId);
-  assert.ok(r.ok, `Cancelar falló: ${r.status}`);
+When('el comercio se da de baja a Gratis desde su lado', { timeout: 60_000 }, async function (this: CustomWorld & IState) {
+  // El mismo endpoint que dispara "Volver al plan Gratis" en el portal.
+  const r = await bajaAGratisPorApi(this.vendor!);
+  assert.ok(r.ok, `La baja del comercio falló: ${r.status} ${JSON.stringify(r.data)}`);
 });
 
 When('su vencimiento se mueve a dentro de {int} días y {int} horas', function (this: CustomWorld & IState, dias: number, horas: number) {
@@ -208,15 +209,22 @@ Then('"Bajas del mes" sube {int}, Vigentes y MRR vuelven a la foto', { timeout: 
   assert.strictEqual(d.mrr, this.base!.mrr, 'Una cancelada no puede seguir sumando MRR.');
 });
 
-Then('la suscripción desaparece de la tabla del panel', { timeout: 60_000 }, async function (this: CustomWorld & IState) {
+Then('la suscripción queda en el panel con estado {string}', { timeout: 60_000 }, async function (this: CustomWorld & IState, estado: string) {
   const d = await dashboard(await getAdminToken());
-  assert.ok(!d.subscriptions.some((s) => s.subscriptionId === this.subId),
-    'La cancelada sigue listada en el panel (solo muestra abiertas).');
+  const fila = d.subscriptions.find((s) => s.subscriptionId === this.subId);
+  assert.ok(fila, 'La cancelada desapareció del panel: debe quedar como rastro.');
+  assert.strictEqual(fila!.status, estado,
+    `La baja debía verse "${estado}" y el panel dice "${fila!.status}".`);
 });
 
-Then('cancelarla de nuevo se rechaza', async function (this: CustomWorld & IState) {
-  const r = await adminCancel(await getAdminToken(), this.vendor!.vendorId);
-  assert.ok(!r.ok, `Cancelar dos veces respondió ${r.status}.`);
+Then('darse de baja de nuevo no crea otra baja', async function (this: CustomWorld & IState) {
+  // El endpoint es idempotente (204 sin suscripción abierta): lo que importa
+  // es que NO fabrique una segunda cancelación ni toque los contadores.
+  await bajaAGratisPorApi(this.vendor!);
+  const conteo = conteoSuscripciones(this.vendor!.vendorId);
+  assert.deepStrictEqual({ canceladas: conteo.canceladas, abiertas: conteo.abiertas },
+    { canceladas: 1, abiertas: 0 },
+    `La segunda baja alteró el historial: ${JSON.stringify(conteo)}.`);
 });
 
 Then('"Bajas del mes" vuelve al valor de la foto', { timeout: 60_000 }, async function (this: CustomWorld & IState) {

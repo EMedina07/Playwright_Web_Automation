@@ -131,6 +131,36 @@ export async function provisionActiveVendor(adminToken: string, productId = 121)
   return { vendorId, name: `QA Comercio ${uid}`, email, password, totpSecret: secret, apiKey, productId };
 }
 
+// Comercio QA para los escenarios de facturación por escala (EP-16): N
+// sucursales EXACTAS (0 = sin sucursal; el motor cobra como 1) y nada más —
+// sin API key ni precios, que aquí no juegan. El registro, la verificación de
+// correo, la aprobación y el enrolamiento MFA son los flujos reales.
+export async function provisionVendorConSucursales(adminToken: string, sucursales: number): Promise<QaVendor> {
+  const uid = uniq();
+  const email = `qa.${uid}@comercios.pricelist.dev`;
+  const password = 'Comercio#QA2026';
+  const reg = await post('/api/vendors/register', {
+    name: `QA Escala ${sucursales}s ${uid}`, legalName: `QA Escala ${uid}, SRL`, email,
+    phone: `+1809${rndDigits(7)}`, address: 'Av. QA 100, Santo Domingo',
+    taxId: `${crypto.randomInt(1, 9)}${rndDigits(8)}`, password,
+  });
+  const vendorId = reg.vendorId as number;
+
+  const code = await waitForEmailCode(email);
+  if (!code) throw new Error(`No apareció código de verificación para ${email}.`);
+  await post('/api/vendors/verify-email', { email, code });
+  await post(`/api/admin/vendors/${vendorId}/applications/approve`, {}, adminToken);
+
+  const { secret, token } = await vendorEnrollAndSecret(email, password);
+  for (let i = 1; i <= sucursales; i++) {
+    await post(`/api/vendors/${vendorId}/branches`, {
+      name: `QA Escala ${uid} — Sucursal ${i}`, address: `Calle QA ${i}, Santo Domingo`,
+      latitude: 18.45 + i * 0.005, longitude: -69.99 + i * 0.005,
+    }, token);
+  }
+  return { vendorId, name: `QA Escala ${sucursales}s ${uid}`, email, password, totpSecret: secret, apiKey: '', productId: 0 };
+}
+
 export async function publishProducts(v: QaVendor, pairs: [number, string][]): Promise<BatchResult> {
   const lines = pairs.map(([id, gtin]) => ({ sku: gtin, price: typicalPrice(id), gtin, name: `p${id}`, itbisRate: 0.18, unit: 'unidad', quantity: 1 }));
   return postSignedBatch(v.vendorId, v.apiKey, { batchId: crypto.randomUUID(), branchId: null, lines });
@@ -174,6 +204,14 @@ export async function reportFromDistinctConsumers(v: QaVendor, n: number, startP
     suspended = r.vendorSuspended;
   }
   return suspended;
+}
+
+/// Higiene: borra los reportes de caja del comercio QA. Sin esto, cada corrida
+/// acumula comercios con 3+ reportes que empujan a los nuevos fuera de la
+/// primera página del panel de Confianza (ordena por cantidad de reportes) —
+/// y la suite se pone roja por contaminación, no por un defecto.
+export function borrarReportesDeVendor(vendorId: number): void {
+  sqlScalar(`DELETE FROM price_reports WHERE vendor_id = ${Math.trunc(vendorId)}`);
 }
 
 // ── Moderación y consulta (admin) ────────────────────────────────────────────

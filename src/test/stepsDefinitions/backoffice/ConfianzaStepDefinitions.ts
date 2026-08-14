@@ -1,14 +1,23 @@
-import { Given, When, Then } from '@cucumber/cucumber';
+import { Given, When, Then, After } from '@cucumber/cucumber';
 import assert from 'node:assert';
 import { ConfianzaPage } from '../../../pages/ConfianzaPage';
 import { CustomWorld } from '../../../support/world';
 import { getAdminToken } from '../../../../core/framework_actions/AdminSession';
 import {
-  provisionActiveVendor, reportFromDistinctConsumers, registerConsumer, report,
-  tryVendorLogin, appCanShowVendor, vendorStatus, type QaVendor,
+  borrarReportesDeVendor, provisionActiveVendor, reportFromDistinctConsumers, registerConsumer,
+  report, tryVendorLogin, appCanShowVendor, vendorStatus, type QaVendor,
 } from '../../../../core/framework_actions/TrustActions';
 
 interface TrustState { vendor?: QaVendor }
+
+// Higiene: los reportes del comercio QA se borran al salir — acumulados,
+// empujan a los comercios de corridas futuras fuera de la primera página del
+// panel (ordena por cantidad de reportes) y producen falsos rojos.
+After({ timeout: 30_000 }, function (this: CustomWorld & TrustState) {
+  if (this.vendor) {
+    try { borrarReportesDeVendor(this.vendor.vendorId); } catch { /* best-effort */ }
+  }
+});
 
 Given('un comercio de prueba activo y publicado', { timeout: 60_000 }, async function (this: CustomWorld) {
   const token = await getAdminToken();
