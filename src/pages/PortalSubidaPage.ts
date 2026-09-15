@@ -23,8 +23,8 @@ export class PortalSubidaPage extends PageHelpers {
     recordStep?: (record: StepRecord) => void,
   ) {
     super(page, attachFn, stepCounter, recordStep);
-    this.tabSubir = page.locator('nav.tabs').getByRole('button', { name: 'Subir Excel', exact: true });
-    this.tabRevision = page.locator('nav.tabs').getByRole('button', { name: 'Por revisar', exact: true });
+    this.tabSubir = page.locator('nav.tabs').getByRole('button', { name: 'Importar productos', exact: true });
+    this.tabRevision = page.locator('nav.tabs').getByRole('button', { name: 'Pendientes de revisión', exact: true });
     this.toggleMapeo = page.getByRole('button', { name: /Mi archivo usa otros nombres/ });
     this.botonGuardarMapeo = page.getByRole('button', { name: 'Guardar mapeo', exact: true });
     this.inputArchivo = page.locator('input[type="file"]');
@@ -32,7 +32,7 @@ export class PortalSubidaPage extends PageHelpers {
   }
 
   async abrirSubirExcel(): Promise<void> {
-    await this.clickElement(this.tabSubir, 'pestaña Subir Excel');
+    await this.clickElement(this.tabSubir, 'pestaña Importar productos');
     await this.waitForLocator(this.page.getByRole('heading', { name: 'Actualizar precios con Excel' }));
   }
 
@@ -66,8 +66,8 @@ export class PortalSubidaPage extends PageHelpers {
   // ── Por revisar ────────────────────────────────────────────────────────────
 
   async abrirPorRevisar(): Promise<void> {
-    await this.clickElement(this.tabRevision, 'pestaña Por revisar');
-    await this.waitForLocator(this.page.getByRole('heading', { name: /Por revisar/ }));
+    await this.clickElement(this.tabRevision, 'pestaña Pendientes de revisión');
+    await this.waitForLocator(this.page.getByRole('heading', { name: /Pendientes de revisión/ }));
   }
 
   private tarjetaDeItem(sku: string): Locator {

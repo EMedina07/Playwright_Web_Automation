@@ -15,7 +15,7 @@ const FIXTURES = path.resolve('src/test/fixtures/excel');
 // El Given ("un comercio QA por API con {int} sucursales y sin tarjeta") y la
 // higiene del After viven en PlanCicloVidaStepDefinitions — mismo world.
 
-When('el comercio entra al portal y abre Subir Excel', { timeout: 120_000 }, async function (this: CustomWorld & SubidaState) {
+When('el comercio entra al portal y abre Importar productos', { timeout: 120_000 }, async function (this: CustomWorld & SubidaState) {
   const portal = this.getPage(PortalPlanPage);
   await portal.entrar(this.vendor!.email, this.vendor!.password, this.vendor!.totpSecret);
   await this.getPage(PortalSubidaPage).abrirSubirExcel();
@@ -37,7 +37,7 @@ Then('la carga publica {int} precios y deja {int} en revisión', { timeout: 60_0
     `En revisión: esperados ${enRevision}, el lote dice ${resultado.enRevision}.`);
 });
 
-When('abre la pestaña Por revisar', { timeout: 60_000 }, async function (this: CustomWorld & SubidaState) {
+When('abre la pestaña Pendientes de revisión', { timeout: 60_000 }, async function (this: CustomWorld & SubidaState) {
   await this.getPage(PortalSubidaPage).abrirPorRevisar();
 });
 
