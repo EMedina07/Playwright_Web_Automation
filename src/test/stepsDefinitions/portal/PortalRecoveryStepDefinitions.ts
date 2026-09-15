@@ -1,5 +1,6 @@
 import { Given, When, Then } from '@cucumber/cucumber';
 import { PortalRecoveryPage } from '../../../pages/PortalRecoveryPage';
+import { PortalPlanPage } from '../../../pages/PortalPlanPage';
 import { CustomWorld } from '../../../support/world';
 
 const RESEND_NOTICE =
@@ -36,4 +37,17 @@ Then('puede confirmar su correo con el código reenviado', async function (this:
   const page = this.getPage(PortalRecoveryPage);
   await page.enterResentCodeAndConfirm(email);
   await page.assertConfirmedAtLogin();
+});
+
+// ── Contraseña olvidada (flujo nuevo del portal) ─────────────────────────────
+// El Given comparte el aprovisionador de PlanCicloVida (mismo world).
+
+When('el comercio cambia su contraseña olvidada a {string} desde el login', { timeout: 90_000 }, async function (this: CustomWorld & { vendor?: import('../../../../core/framework_actions/TrustActions').QaVendor }, nueva: string) {
+  await this.getPage(PortalRecoveryPage).cambiarPasswordOlvidada(this.vendor!.email, nueva);
+  this.vendor!.password = nueva; // la verdad del mundo cambió con la contraseña
+});
+
+Then('puede iniciar sesión en el portal con la contraseña nueva', { timeout: 90_000 }, async function (this: CustomWorld & { vendor?: import('../../../../core/framework_actions/TrustActions').QaVendor }) {
+  const portal = this.getPage(PortalPlanPage);
+  await portal.entrar(this.vendor!.email, this.vendor!.password, this.vendor!.totpSecret);
 });

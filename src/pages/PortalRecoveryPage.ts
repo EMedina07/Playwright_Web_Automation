@@ -108,4 +108,25 @@ export class PortalRecoveryPage extends PageHelpers {
       15_000,
     );
   }
+
+  // ── "¿Olvidaste tu contraseña?" ────────────────────────────────────────────
+  // Desde el login: correo → código (autocompletado en dev) → contraseña
+  // nueva → de vuelta al login con el aviso de éxito.
+  async cambiarPasswordOlvidada(email: string, nuevaPassword: string): Promise<void> {
+    await this.navigate(environments.portalURL);
+    await this.waitForLocator(this.page.getByTestId('go-forgot'));
+    await this.clickElement(this.page.getByTestId('go-forgot'), '¿Olvidaste tu contraseña?');
+    await this.fillField(this.page.getByTestId('forgot-email'), email, 'correo del comercio');
+    await this.clickElement(this.page.getByTestId('forgot-submit'), 'Enviarme el código');
+    // En dev el código llega autocompletado: se espera a que el campo tenga 6 dígitos.
+    const codigo = this.page.getByTestId('forgot-code');
+    await codigo.waitFor({ state: 'visible', timeout: 15_000 });
+    await this.page.waitForFunction(
+      (el) => (el as { value: string }).value.length === 6,
+      await codigo.elementHandle(), { timeout: 15_000 });
+    await this.captureCurrentState('ASSERT', 'El código de reseteo llegó autocompletado (dev)', 'forgot-code');
+    await this.fillField(this.page.getByTestId('forgot-new-password'), nuevaPassword, 'contraseña nueva', true);
+    await this.clickElement(this.page.getByTestId('forgot-reset'), 'Cambiar contraseña');
+    await this.waitForLocator(this.page.getByTestId('login-notice'));
+  }
 }

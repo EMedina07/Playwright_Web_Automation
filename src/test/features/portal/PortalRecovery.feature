@@ -12,3 +12,9 @@ Feature: Recuperación de verificación de correo — Portal de PriceList
     When el comercio cierra la pantalla sin ingresar el código
     And reabre la confirmación desde el login y reenvía el código
     Then puede confirmar su correo con el código reenviado
+
+  @Regresion
+  Scenario: El comercio cambia su contraseña olvidada desde el login y entra con la nueva
+    Given un comercio QA por API con 1 sucursales y sin tarjeta
+    When el comercio cambia su contraseña olvidada a "CambiadaQA2026!" desde el login
+    Then puede iniciar sesión en el portal con la contraseña nueva
