@@ -93,4 +93,34 @@ export class PortalSubidaPage extends PageHelpers {
     await this.waitForLocator(this.page.getByText('Nada pendiente'));
     await this.captureCurrentState('ASSERT', 'La cola quedó vacía: "Nada pendiente"', 'estado vacío');
   }
+
+  /// El aviso de filas omitidas ("Algunas filas se omitieron") — hallazgo de
+  /// la tester: lo excluido ya no se pierde en silencio.
+  async avisosDeOmision(): Promise<string> {
+    const aviso = this.page.locator('.callout', { hasText: 'Algunas filas se omitieron' });
+    await aviso.waitFor({ state: 'visible', timeout: 15_000 });
+    const texto = (await aviso.innerText()).replace(/\s+/g, ' ');
+    await this.captureCurrentState('ASSERT', `Avisos de omisión: "${texto}"`, 'callout warn');
+    return texto;
+  }
+
+  /// ¿El ítem ofrece el camino directo "Confirmar y publicar como producto nuevo"?
+  async botonConfirmarNuevoVisible(sku: string): Promise<boolean> {
+    // Dos variantes según haya sugerencia o no: "Confirmar y publicar como
+    // producto nuevo" (primario) o "No, publicarlo como producto nuevo".
+    const boton = this.tarjetaDeItem(sku).first()
+      .getByRole('button', { name: /como producto nuevo/ });
+    const visible = await boton.isVisible();
+    await this.captureCurrentState('ASSERT', `Botón de confirmar en "${sku}": ${visible}`, '.review-card button');
+    return visible;
+  }
+
+  /// Confirma el ítem como producto nuevo y espera a que salga de la cola.
+  async confirmarComoNuevo(sku: string): Promise<void> {
+    const tarjeta = this.tarjetaDeItem(sku).first();
+    await this.clickElement(
+      tarjeta.getByRole('button', { name: /como producto nuevo/ }),
+      `Confirmar "${sku}" como producto nuevo`);
+    await tarjeta.waitFor({ state: 'detached', timeout: 15_000 });
+  }
 }

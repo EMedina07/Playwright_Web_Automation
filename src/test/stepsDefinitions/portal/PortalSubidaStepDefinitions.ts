@@ -1,13 +1,16 @@
 import path from 'node:path';
-import { When, Then } from '@cucumber/cucumber';
+import { Given, When, Then } from '@cucumber/cucumber';
 import assert from 'node:assert';
 import { CustomWorld } from '../../../support/world';
-import { type QaVendor } from '../../../../core/framework_actions/TrustActions';
+import crypto from 'node:crypto';
+import { postSignedBatch, raw, type QaVendor } from '../../../../core/framework_actions/TrustActions';
+import { vendorJwt } from '../../../../core/framework_actions/PromotionActions';
 import { PortalPlanPage } from '../../../pages/PortalPlanPage';
 import { PortalSubidaPage } from '../../../pages/PortalSubidaPage';
 
 interface SubidaState {
   vendor?: QaVendor;
+  skuInedito?: string;
 }
 
 const FIXTURES = path.resolve('src/test/fixtures/excel');
@@ -52,4 +55,35 @@ When('descarta el producto {string}', { timeout: 60_000 }, async function (this:
 
 Then('no queda nada por revisar', { timeout: 60_000 }, async function (this: CustomWorld & SubidaState) {
   await this.getPage(PortalSubidaPage).nadaPendiente();
+});
+
+Given('le llega por API una línea de precio sin código de barras y con nombre inédito', { timeout: 90_000 }, async function (this: CustomWorld & SubidaState) {
+  // Canal A con nombre único por corrida: si el nombre fuera fijo, la segunda
+  // corrida lo hallaría publicado y el fuzzy lo vincularía solo.
+  const jwt = await vendorJwt(this.vendor!);
+  const keyResp = await raw(`/api/vendors/${this.vendor!.vendorId}/api-key`, { method: 'POST', token: jwt });
+  const apiKey = (keyResp.data as { apiKey: string }).apiKey;
+  this.skuInedito = `CONF-${Date.now()}`;
+  const r = await postSignedBatch(this.vendor!.vendorId, apiKey, {
+    batchId: crypto.randomUUID(), branchId: null,
+    lines: [{ sku: this.skuInedito, price: 180, name: `Confirmable QA ${Date.now()}`, itbisRate: 0.18, unit: 'unidad', quantity: 1 }],
+  });
+  assert.strictEqual(r.sentToReview, 1, 'La línea inédita debía caer a revisión.');
+});
+
+Then('su producto inédito ofrece el botón de confirmar como producto nuevo', { timeout: 60_000 }, async function (this: CustomWorld & SubidaState) {
+  assert.ok(await this.getPage(PortalSubidaPage).botonConfirmarNuevoVisible(this.skuInedito!),
+    `"${this.skuInedito}" no ofrece el camino directo de confirmar — el callejón sin salida reportado.`);
+});
+
+When('lo confirma como producto nuevo', { timeout: 60_000 }, async function (this: CustomWorld & SubidaState) {
+  await this.getPage(PortalSubidaPage).confirmarComoNuevo(this.skuInedito!);
+});
+
+Then('el aviso de omisiones menciona el precio vacío y el código faltante', { timeout: 60_000 }, async function (this: CustomWorld & SubidaState) {
+  const avisos = await this.getPage(PortalSubidaPage).avisosDeOmision();
+  assert.ok(avisos.includes('el precio está vacío'),
+    `El aviso no menciona el precio vacío: "${avisos}"`);
+  assert.ok(avisos.includes('falta el código'),
+    `El aviso no menciona el código faltante: "${avisos}"`);
 });
